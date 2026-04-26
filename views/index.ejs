@@ -1,0 +1,1887 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><%= title %></title>
+  <link rel="stylesheet" href="/css/main.css?v=<%= Date.now() %>">
+  <script src="/js/marked.min.js"></script>
+</head>
+<body>
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">📋</div>
+      <h1>ATS</h1>
+    </div>
+    <nav class="sidebar-nav" id="mainNav">
+      <div class="nav-section">
+        <div class="nav-section-title">工作台</div>
+        <div class="nav-item active" onclick="switchView('overview')">
+          <span class="icon">👥</span>
+          <span class="label">Agent 概览</span>
+        </div>
+      </div>
+      <div class="nav-section">
+        <div class="nav-section-title">项目</div>
+        <div class="nav-item" onclick="switchView('projects')">
+          <span class="icon">📁</span>
+          <span class="label">项目管理</span>
+        </div>
+        <div class="nav-item" onclick="switchView('requirements')">
+          <span class="icon">🎯</span>
+          <span class="label">需求管理</span>
+        </div>
+        <div class="nav-item" onclick="switchView('tech')">
+          <span class="icon">💻</span>
+          <span class="label">技术方案</span>
+        </div>
+        <div class="nav-item" onclick="switchView('kanban')">
+          <span class="icon">📋</span>
+          <span class="label">任务管理</span>
+        </div>
+      </div>
+      <div class="nav-section">
+        <div class="nav-section-title">系统</div>
+        <div class="nav-item" onclick="switchView('system')">
+          <span class="icon">⚙️</span>
+          <span class="label">系统设置</span>
+        </div>
+      </div>
+    </nav>
+  </aside>
+
+  <!-- Main Content -->
+  <div class="main-wrapper">
+    <header class="header">
+      <div class="header-left">
+        <h2 class="header-title" id="currentViewTitle">Agent 概览</h2>
+      </div>
+      <div class="header-right">
+        <span class="header-time" id="currentTime"></span>
+        <div class="header-status">系统正常</div>
+      </div>
+    </header>
+
+    <main class="main-content">
+      <!-- Agent Overview View -->
+      <div id="view-overview" class="view active">
+        <div class="agents-grid" id="agentsGrid">
+          <div class="empty-state">
+            <div class="empty-state-icon">⏳</div>
+            <div class="empty-state-title">加载中...</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Kanban View (Tasks Table) -->
+      <div id="view-kanban" class="view">
+        <div style="margin-bottom:16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <button class="btn btn-primary" onclick="showCreateTask()">+ 新建任务</button>
+          <div style="display:flex;gap:8px;align-items:center;margin-left:auto;flex-wrap:wrap">
+            <select id="taskFilterStatus" class="form-select" style="width:110px" onchange="loadTasks()">
+              <option value="">全部状态</option>
+              <option value="todo">待执行</option>
+              <option value="in_progress">进行中</option>
+              <option value="done">已完成</option>
+            </select>
+            <select id="taskFilterPriority" class="form-select" style="width:100px" onchange="loadTasks()">
+              <option value="">全部优先级</option>
+              <option value="p0">P0</option>
+              <option value="p1">P1</option>
+              <option value="p2">P2</option>
+            </select>
+            <select id="taskFilterAssignee" class="form-select" style="width:130px" onchange="loadTasks()">
+              <option value="">全部负责人</option>
+            </select>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-body" style="padding:0">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th style="width:60px">ID</th>
+                  <th>关联需求</th>
+                  <th>任务名称</th>
+                  <th style="width:80px">优先级</th>
+                  <th style="width:120px">负责人</th>
+                  <th style="width:100px">状态</th>
+                  <th style="width:80px">操作</th>
+                </tr>
+              </thead>
+              <tbody id="tasksTableBody">
+                <tr><td colspan="7" style="text-align:center;padding:40px;color:var(--text-muted)">加载中...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Task Detail Drawer -->
+      <div class="drawer-overlay" id="drawerOverlay" onclick="closeDrawer()"></div>
+      <div class="drawer" id="taskDrawer">
+        <div class="drawer-header">
+          <h3 id="drawerTitle">任务详情</h3>
+          <button class="drawer-close" onclick="closeDrawer()">×</button>
+        </div>
+        <div class="drawer-body" id="drawerBody"></div>
+      </div>
+
+      <!-- Local Project Drawer -->
+      <div class="drawer-overlay" id="lpDrawerOverlay" onclick="closeLocalProjectDrawer()"></div>
+      <div class="drawer" id="localProjectDrawer" style="width:560px">
+        <div class="drawer-header">
+          <h3 id="lpDrawerTitle">本地项目</h3>
+          <button class="drawer-close" onclick="closeLocalProjectDrawer()">×</button>
+        </div>
+        <div class="drawer-body" id="lpDrawerBody"></div>
+      </div>
+
+      <!-- Approval View -->
+      <!-- Tech Design View -->
+      <div id="view-tech" class="view">
+        <div style="margin-bottom:16px;display:flex;gap:8px;flex-wrap:wrap">
+          <input type="text" id="tpSearch" class="form-input" style="flex:1;max-width:200px" placeholder="搜索技术方案..." onkeyup="if(event.key==='Enter')loadTechPlans()">
+          <select id="tpReqFilter" class="form-select" style="width:180px" onchange="loadTechPlans()">
+            <option value="">全部需求</option>
+          </select>
+          <select id="tpCatFilter" class="form-select" style="width:120px" onchange="loadTechPlans()">
+            <option value="">全部分类</option>
+            <option value="frontend">前端</option>
+            <option value="backend">后端</option>
+            <option value="test">测试</option>
+            <option value="ops">运维</option>
+          </select>
+          <select id="tpAuditFilter" class="form-select" style="width:130px" onchange="loadTechPlans()">
+            <option value="">全部审核</option>
+            <option value="pending">待审核</option>
+            <option value="pass">通过</option>
+            <option value="reject">驳回</option>
+          </select>
+          <select id="tpStatusFilter" class="form-select" style="width:130px" onchange="loadTechPlans()">
+            <option value="">全部状态</option>
+            <option value="review">待评审</option>
+            <option value="in_progress">进行中</option>
+            <option value="done">已完成</option>
+          </select>
+          <button class="btn btn-secondary" onclick="loadTechPlans()">🔍 搜索</button>
+          <button class="btn btn-primary" onclick="showCreateTechPlan()">+ 新建方案</button>
+        </div>
+        <div class="card">
+          <div class="card-body" style="padding:0">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th style="width:50px">ID</th>
+                  <th style="width:120px">项目</th>
+                  <th style="width:180px">需求</th>
+                  <th style="width:80px">类别</th>
+                  <th style="width:120px">作者</th>
+                  <th style="width:70px">版本</th>
+                  <th style="width:100px">审核状态</th>
+                  <th style="width:100px">评审状态</th>
+                  <th style="width:180px">更新时间</th>
+                  <th style="width:220px">操作</th>
+                </tr>
+              </thead>
+              <tbody id="techPlansTableBody">
+                <tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text-muted)">加载中...</td></tr>
+              </tbody>
+            </table>
+            <div id="techPlansPagination" style="padding:16px;display:flex;justify-content:center;align-items:center;gap:8px"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Requirements View -->
+      <div id="view-requirements" class="view">
+        <div style="margin-bottom:16px;display:flex;gap:8px">
+          <input type="text" id="reqSearch" class="form-input" style="flex:1" placeholder="搜索需求名称、描述..." onkeyup="if(event.key==='Enter')searchRequirements()">
+          <select id="reqProjectFilter" class="form-select" style="width:150px" onchange="searchRequirements()">
+            <option value="">全部项目</option>
+          </select>
+          <select id="reqStatusFilter" class="form-select" style="width:130px" onchange="searchRequirements()">
+            <option value="">全部状态</option>
+            <option value="review">待评审</option>
+            <option value="in_progress">进行中</option>
+            <option value="done">已完成</option>
+          </select>
+          <select id="reqSort" class="form-select" style="width:120px" onchange="searchRequirements()">
+            <option value="desc">最新创建</option>
+            <option value="asc">最早创建</option>
+          </select>
+          <button class="btn btn-secondary" onclick="searchRequirements()">🔍 搜索</button>
+          <button class="btn btn-primary" onclick="showCreateRequirement()">+ 新建</button>
+        </div>
+        <div class="card">
+          <div class="card-body" style="padding:0">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th style="width:50px">ID</th>
+                  <th style="width:150px">需求名称</th>
+                  <th style="width:120px">关联项目</th>
+                  <th style="width:60px">优先级</th>
+                  <th style="width:100px">状态</th>
+                  <th style="width:100px">负责人</th>
+                  <th style="width:180px">计划时间</th>
+                  <th style="width:140px">创建时间</th>
+                  <th style="width:80px;white-space:nowrap">操作</th>
+                </tr>
+              </thead>
+              <tbody id="requirementsTableBody">
+                <tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text-muted)">加载中...</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="card-footer" style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center">
+            <div id="reqPagerInfo" style="font-size:12px;color:var(--text-muted)"></div>
+            <div id="reqPager" style="display:flex;gap:4px"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Projects View -->
+      <div id="view-projects" class="view">
+        <div style="margin-bottom:16px;display:flex;gap:8px">
+          <input type="text" id="projectSearch" class="form-input" style="flex:1" placeholder="搜索项目名称、编码、描述..." onkeyup="if(event.key==='Enter')searchProjects()">
+          <select id="projectSort" class="form-select" style="width:120px" onchange="searchProjects()">
+            <option value="desc">最新创建</option>
+            <option value="asc">最早创建</option>
+          </select>
+          <button class="btn btn-secondary" onclick="searchProjects()">🔍 搜索</button>
+          <button class="btn btn-primary" onclick="showCreateProject()">+ 新建</button>
+        </div>
+        <div class="card">
+          <div class="card-body" style="padding:0">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th style="width:50px">ID</th>
+                  <th style="width:120px">项目名称</th>
+                  <th style="width:200px">项目描述</th>
+                  <th style="width:70px">本地项目</th>
+                  <th style="width:80px">编码</th>
+                  <th style="width:60px">阶段</th>
+                  <th style="width:70px">状态</th>
+                  <th style="width:140px">创建时间</th>
+                  <th style="width:140px">修改时间</th>
+                  <th style="width:80px;white-space:nowrap">操作</th>
+                </tr>
+              </thead>
+              <tbody id="projectsTableBody">
+                <tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text-muted)">加载中...</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="card-footer" style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center">
+            <div id="projectPagerInfo" style="font-size:12px;color:var(--text-muted)"></div>
+            <div id="projectPager" style="display:flex;gap:4px"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- System View -->
+      <div id="view-system" class="view">
+        <!-- 系统统计 -->
+        <div class="stats-grid" id="statsGrid"></div>
+
+        <!-- Agent 列表 -->
+        <div style="margin-top:24px">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title"><span>👥</span> Agent 列表</div>
+              <span class="card-subtitle">团队成员及工作状态</span>
+            </div>
+            <div class="card-body" style="padding:0">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>成员</th>
+                    <th>角色</th>
+                    <th>状态</th>
+                    <th>当前任务</th>
+                    <th>工作量</th>
+                  </tr>
+                </thead>
+                <tbody id="agentListBody">
+                  <tr><td colspan="5" style="text-align:center;padding:30px;color:var(--text-muted)">加载中...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- 系统信息 -->
+        <div style="margin-top:24px">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title"><span>🖥️</span> 系统信息</div>
+            </div>
+            <div class="card-body" style="padding:0">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>项目</th>
+                    <th>值</th>
+                  </tr>
+                </thead>
+                <tbody id="systemInfoBody">
+                  <tr><td colspan="2" style="text-align:center;padding:30px;color:var(--text-muted)">加载中...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Modal -->
+  <div class="modal-overlay" id="modalOverlay">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 class="modal-title" id="modalTitle">标题</h3>
+        <button class="modal-close" onclick="closeModal()">×</button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+      <div class="modal-footer" id="modalFooter"></div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script>
+    // Global error handler
+    window.addEventListener('error', function(e) {
+      console.error('Page error:', e.message, 'at', e.filename, ':', e.lineno);
+    });
+
+    // Global state
+    var agents = [];
+    var requirements = [];
+    var currentView = 'overview';
+    var globalSSE = null; // 全局 SSE 连接
+    var loadedAgents = false; // 是否已加载过 Agent 数据
+
+    // Update time
+    setInterval(function() {
+      document.getElementById('currentTime').textContent = new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit'});
+    }, 1000);
+    document.getElementById('currentTime').textContent = new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit'});
+
+    // 初始化全局 SSE
+    function initGlobalSSE() {
+      if (globalSSE) return;
+
+      globalSSE = new EventSource('/api/system/stream');
+      globalSSE.onmessage = function(e) {
+        try {
+          var data = JSON.parse(e.data);
+
+          // 处理日志更新 (data.agentId 存在且有 data.logs)
+          if (data.agentId && data.logs) {
+            var container = document.getElementById('logs-' + data.agentId);
+            if (container) {
+              var html = '';
+              var logs = data.logs || [];
+              for (var i = 0; i < Math.min(logs.length, 10); i++) {
+                var log = logs[i];
+                html += '<div class="log-entry"><span class="log-time">' + (log.created_at ? log.created_at.split(' ')[1] : '') + '</span>' + log.message + '</div>';
+              }
+              container.innerHTML = html || '<div style="color:var(--text-muted);padding:8px">暂无日志</div>';
+            }
+          }
+
+          // 处理工作开始
+          if (data.type === 'work_started') {
+            showToast('success', '任务开始', data.current_detail || 'Agent 开始执行任务');
+            loadAgents();
+          }
+
+          // 处理进度更新（实时）
+          if (data.type === 'progress_update' && data.agentId) {
+            var agentCard = document.querySelector('.agent-card[onclick*="' + data.agentId + '"]');
+            if (agentCard) {
+              var progressFill = agentCard.querySelector('.progress-fill');
+              var progressLabel = agentCard.querySelector('.progress-label span:last-child');
+              if (progressFill) progressFill.style.width = data.progress + '%';
+              if (progressLabel) progressLabel.textContent = data.progress + '%';
+            }
+          }
+
+          // 处理工作完成
+          if (data.type === 'work_completed') {
+            showToast('success', '任务完成', (data.agent_name || 'Agent') + ' 已完成任务');
+            loadAgents();
+            loadAgentLogs(data.agentId);
+          }
+
+          // 处理技术方案审核通过通知
+          if (data.type === 'tech_plan_approved') {
+            var catNames = { frontend: '前端', backend: '后端', test: '测试', ops: '运维' };
+            showToast('success', '技术方案通过', catNames[data.category] + ' Agent 已收到通知，将开始规划任务');
+            loadAgents();
+          }
+
+          // 本地项目启动/停止
+          if (data.type === 'local_project_started') {
+            showToast('success', '项目已启动', '运行于 ' + window.location.hostname + ':' + data.port);
+          }
+          if (data.type === 'local_project_stopped') {
+            showToast('info', '项目已停止');
+          }
+
+          // 工作状态变化时刷新 Agent 和日志
+          if (data.type === 'work_started' || data.type === 'work_completed') {
+            loadAgents();
+          }
+        } catch (err) {}
+      };
+
+      globalSSE.onerror = function() {
+        console.warn('SSE Connection lost, retrying in 5s...');
+        globalSSE.close();
+        globalSSE = null;
+        setTimeout(initGlobalSSE, 5000);
+      };
+    }
+
+    // Switch view
+    function switchView(view) {
+      currentView = view;
+      // Hide all views
+      var views = document.querySelectorAll('.view');
+      for (var i = 0; i < views.length; i++) {
+        views[i].classList.remove('active');
+      }
+      // Show selected view
+      var targetView = document.getElementById('view-' + view);
+      if (targetView) {
+        targetView.classList.add('active');
+      }
+      // Update nav
+      var navItems = document.querySelectorAll('.nav-item');
+      for (var i = 0; i < navItems.length; i++) {
+        navItems[i].classList.remove('active');
+        if (navItems[i].getAttribute('onclick') === "switchView('" + view + "')") {
+          navItems[i].classList.add('active');
+        }
+      }
+      // Update title
+      var titles = {
+        overview: 'Agent 概览',
+        kanban: '任务管理',
+        projects: '项目管理',
+        requirements: '需求管理',
+        tech: '技术方案',
+        system: '系统设置'
+      };
+      document.getElementById('currentViewTitle').textContent = titles[view] || view;
+
+      // 根据视图加载数据
+      if (view === 'system') {
+        loadSystemInfo();
+      } else if (view === 'kanban') {
+        loadTasks();
+      } else if (view === 'overview') {
+        loadAgents();
+      } else if (view === 'projects') {
+        loadProjects();
+      } else if (view === 'requirements') {
+        loadRequirements();
+      } else if (view === 'tech') {
+        loadTechPlans();
+      }
+    }
+
+    // API Helper
+    async function api(url, options) {
+      options = options || {};
+      var res = await fetch(url, options);
+      var data = await res.json();
+      if (data.code !== 0) throw new Error(data.message);
+      return data.data;
+    }
+
+    // Toast
+    function showToast(type, title, message) {
+      var icons = {success:'✓', error:'✗', warning:'⚠', info:'ℹ'};
+      var toast = document.createElement('div');
+      toast.className = 'toast ' + type;
+      toast.innerHTML = '<span class="toast-icon">' + icons[type] + '</span><div class="toast-content"><div class="toast-title">' + title + '</div><div class="toast-message">' + message + '</div></div>';
+      document.getElementById('toastContainer').appendChild(toast);
+      setTimeout(function() { toast.remove(); }, 1000);
+    }
+
+    // Modal
+    function showModal(title, body, footer, width) {
+      document.getElementById('modalTitle').textContent = title;
+      document.getElementById('modalBody').innerHTML = body;
+      document.getElementById('modalFooter').innerHTML = footer || '';
+      var modal = document.getElementById('modalOverlay');
+      var content = modal.querySelector('.modal');
+      if (width) content.style.maxWidth = width;
+      else content.style.maxWidth = '500px';
+      modal.classList.add('show');
+    }
+
+    function closeModal() {
+      var modal = document.getElementById('modalOverlay');
+      modal.classList.remove('show');
+      var content = modal.querySelector('.modal');
+      if (content) content.style.maxWidth = '500px';
+    }
+
+    // Load Agents
+    async function loadAgents() {
+      try {
+        agents = await api('/api/agents');
+        // 同时加载所有日志
+        var allLogs = await api('/api/agents/logs/all');
+        agentLogs = allLogs;
+        renderAgents();
+        updatePendingApprovals();
+        loadedAgents = true;
+      } catch (e) {
+        console.error('Failed to load agents:', e);
+      }
+    }
+
+    // 存储所有日志
+    var agentLogs = [];
+
+    function renderAgents() {
+      var grid = document.getElementById('agentsGrid');
+      if (agents.length === 0) {
+        grid.innerHTML = '<div class="empty-state"><div class="empty-state-icon">👥</div><div class="empty-state-title">暂无 Agent</div></div>';
+        return;
+      }
+      var html = '';
+      for (var i = 0; i < agents.length; i++) {
+        var agent = agents[i];
+        var statusText = agent.status === 'idle' ? '空闲' : agent.status === 'busy' ? '工作中' : '已暂停';
+
+        // 获取该 Agent 的日志
+        var logsHtml = '';
+        var agentLogItems = agentLogs.filter(function(l) { return l.agent_id === agent.id; });
+        if (agentLogItems.length === 0) {
+          logsHtml = '<div style="color:var(--text-muted);padding:8px">暂无日志</div>';
+        } else {
+          for (var j = 0; j < Math.min(agentLogItems.length, 5); j++) {
+            var log = agentLogItems[j];
+            var time = log.created_at ? log.created_at.split(' ')[1] : '';
+            logsHtml += '<div class="log-entry"><span class="log-time">' + time + '</span>' + log.message + '</div>';
+          }
+        }
+
+        html += '<div class="agent-card' + (agent.status === 'pause' ? ' suspended' : '') + '" onclick="showAgentDetail(\'' + agent.id + '\')">';
+        html += '<div class="agent-header"><div class="agent-avatar" style="background:' + agent.color + '30;">' + agent.emoji + '</div>';
+        html += '<div class="agent-info"><h3>' + agent.name + ' <span style="font-size:12px;font-weight:normal;color:var(--text-muted)">(' + agent.role + ')</span></h3></div></div>';
+        html += '<span class="status-badge ' + agent.status + '">' + statusText + '</span>';
+        html += '<div class="progress-wrapper"><div class="progress-label"><span>' + (agent.current_action || '空闲中') + '</span><span>' + (agent.progress || 0) + '%</span></div>';
+        html += '<div class="progress-bar"><div class="progress-fill" style="width:' + (agent.progress || 0) + '%"></div></div>';
+        html += '<div style="font-size:12px;color:var(--text-muted);margin-top:6px">' + (agent.current_detail || '') + '</div></div>';
+        html += '<div class="log-container" id="logs-' + agent.id + '">' + logsHtml + '</div>';
+        html += '</div>';
+      }
+      grid.innerHTML = html;
+    }
+
+    // Load Tasks for Kanban (Table View)
+    async function loadTasks() {
+      try {
+        var params = new URLSearchParams();
+        var statusVal = document.getElementById('taskFilterStatus').value;
+        var priorityVal = document.getElementById('taskFilterPriority').value;
+        var assigneeVal = document.getElementById('taskFilterAssignee').value;
+        if (statusVal) params.append('status', statusVal);
+        if (priorityVal) params.append('priority', priorityVal);
+        if (assigneeVal) params.append('assignee_id', assigneeVal);
+
+        var tasksData = await api('/api/tasks?' + params.toString());
+        var reqsData = await api('/api/requirements');
+        kanbanTasks = tasksData;
+        kanbanRequirements = reqsData;
+
+        // 构建负责人筛选下拉（只构建一次）
+        var assigneeSelect = document.getElementById('taskFilterAssignee');
+        if (assigneeSelect.options.length <= 1) {
+          var currentVal = assigneeSelect.value;
+          for (var i = 0; i < agents.length; i++) {
+            var opt = document.createElement('option');
+            opt.value = agents[i].id;
+            opt.textContent = agents[i].emoji + ' ' + agents[i].name;
+            assigneeSelect.appendChild(opt);
+          }
+          assigneeSelect.value = currentVal;
+        }
+
+        renderTasksTable();
+      } catch (e) {
+        console.error('Failed to load tasks:', e);
+      }
+    }
+
+    var kanbanTasks = [];
+    var kanbanRequirements = [];
+
+    function renderTasksTable() {
+      var tbody = document.getElementById('tasksTableBody');
+      if (kanbanTasks.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:40px;color:var(--text-muted)">暂无任务，点击上方按钮新建</td></tr>';
+        return;
+      }
+
+      var html = '';
+      for (var i = 0; i < kanbanTasks.length; i++) {
+        var task = kanbanTasks[i];
+        var statusText = {todo:'待执行', in_progress:'进行中', done:'已完成'}[task.status] || task.status;
+        var statusClass = task.status;
+        var hasResult = task.has_result ? '📎 ' : '';
+
+        html += '<tr>';
+        html += '<td>#' + task.id + '</td>';
+        html += '<td>' + (task.requirement_title ? '<span style="color:var(--accent-blue);cursor:pointer" onclick="viewRequirement(' + task.requirement_id + ')">' + task.requirement_title + '</span>' : '<span style="color:var(--text-muted)">-</span>') + '</td>';
+        html += '<td><span style="cursor:pointer;color:var(--accent-blue)" onclick="showTaskDrawer(' + task.id + ')">' + hasResult + task.title + '</span></td>';
+        html += '<td><span class="priority-tag ' + task.priority + '">' + task.priority.toUpperCase() + '</span></td>';
+        html += '<td>' + (task.assignee_emoji || '') + ' ' + (task.assignee_name || '<span style="color:var(--text-muted)">未分配</span>') + '</td>';
+        html += '<td><span class="status-badge ' + statusClass + '">' + statusText + '</span></td>';
+        html += '<td><button class="btn btn-sm btn-secondary" onclick="showTaskDrawer(' + task.id + ')">详情</button></td>';
+        html += '</tr>';
+      }
+      tbody.innerHTML = html;
+    }
+
+    // 新建任务
+    function showCreateTask() {
+      var agentOptions = '<option value="">未分配</option>';
+      for (var i = 0; i < agents.length; i++) {
+        agentOptions += '<option value="' + agents[i].id + '">' + agents[i].emoji + ' ' + agents[i].name + ' (' + agents[i].role + ')</option>';
+      }
+      var reqOptions = '<option value="">无关联需求</option>';
+      for (var i = 0; i < kanbanRequirements.length; i++) {
+        reqOptions += '<option value="' + kanbanRequirements[i].id + '">' + kanbanRequirements[i].title + '</option>';
+      }
+      showModal('新建任务',
+        '<form onsubmit="createTask(event)"><div class="form-group"><label class="form-label">任务标题</label><input name="title" class="form-input" required placeholder="请输入任务标题"></div><div class="form-group"><label class="form-label">任务描述</label><textarea name="description" class="form-textarea" placeholder="请描述任务内容"></textarea></div><div class="form-group"><label class="form-label">关联需求</label><select name="requirement_id" class="form-select">' + reqOptions + '</select></div><div class="form-group"><label class="form-label">分配给</label><select name="assignee_id" class="form-select">' + agentOptions + '</select></div><div class="form-group"><label class="form-label">优先级</label><select name="priority" class="form-select"><option value="p0">P0 - 紧急</option><option value="p1">P1 - 高</option><option value="p2" selected>P2 - 中</option></select></div></form>',
+        '<button type="button" class="btn btn-secondary" onclick="closeModal()">取消</button><button type="submit" class="btn btn-primary">创建任务</button>'
+      );
+    }
+
+    function createTask(e) {
+      e.preventDefault();
+      var form = e.target;
+      api('/api/tasks', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          title: form.title.value,
+          description: form.description.value,
+          requirement_id: form.requirement_id.value || null,
+          assignee_id: form.assignee_id.value || null,
+          priority: form.priority.value
+        })
+      }).then(function() {
+        closeModal();
+        showToast('success', '创建成功', '任务已创建');
+        loadTasks();
+      }).catch(function(e) { showToast('error', '创建失败', e.message); });
+    }
+
+    // 任务详情抽屉
+    async function showTaskDrawer(taskId) {
+      try {
+        var task = await api('/api/tasks/' + taskId);
+        var results = await api('/api/tasks/' + taskId + '/results');
+
+        var statusMap = {todo:'待执行', in_progress:'进行中', done:'已完成'};
+        var statusText = statusMap[task.status] || task.status;
+
+        var resultHtml = '';
+        if (results.length > 0) {
+          resultHtml = '<div style="margin-top:24px"><h4 style="margin-bottom:12px">📎 任务结果</h4>';
+          for (var i = 0; i < results.length; i++) {
+            var r = results[i];
+            if (r.content_type === 'html') {
+              resultHtml += '<div style="border:1px solid var(--border-color);border-radius:8px;padding:16px;background:var(--bg-primary)"><div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">' + r.file_name + '</div><iframe srcdoc="' + encodeURIComponent(r.content) + '" style="width:100%;height:300px;border:none;background:white;border-radius:4px"></iframe></div>';
+            } else if (r.content_type === 'code') {
+              resultHtml += '<div style="border:1px solid var(--border-color);border-radius:8px;padding:16px;background:var(--bg-primary)"><div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">' + r.file_name + '</div><pre style="background:#1e1e1e;color:#d4d4d4;padding:16px;border-radius:8px;overflow-x:auto;font-size:12px;max-height:400px">' + escapeHtml(r.content) + '</pre></div>';
+            } else {
+              resultHtml += '<div style="border:1px solid var(--border-color);border-radius:8px;padding:16px;background:var(--bg-primary)"><pre style="white-space:pre-wrap;font-size:13px">' + escapeHtml(r.content) + '</pre></div>';
+            }
+          }
+          resultHtml += '</div>';
+        }
+
+        document.getElementById('drawerTitle').textContent = '任务 #' + task.id + ': ' + task.title;
+        document.getElementById('drawerBody').innerHTML =
+          '<div style="padding:20px">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
+            '<div style="font-size:16px;font-weight:600">' + task.title + '</div>' +
+            '<div style="display:flex;gap:8px">' +
+              '<button class="btn btn-sm btn-secondary" onclick="showEditTask(' + task.id + ')">编辑</button>' +
+              '<button class="btn btn-sm" style="background:var(--danger);color:white;border:none" onclick="deleteTask(' + task.id + ')">删除</button>' +
+            '</div>' +
+          '</div>' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px">' +
+          '<div><div style="font-size:12px;color:var(--text-muted)">状态</div><div><select onchange="updateTaskField(' + task.id + ', \'status\', this.value)" style="background:var(--bg-secondary);border:1px solid var(--border-color);color:var(--text-primary);padding:6px 10px;border-radius:6px;cursor:pointer">' +
+            '<option value="todo"' + (task.status==='todo'?' selected':'') + '>待执行</option>' +
+            '<option value="in_progress"' + (task.status==='in_progress'?' selected':'') + '>进行中</option>' +
+            '<option value="done"' + (task.status==='done'?' selected':'') + '>已完成</option>' +
+          '</select></div></div>' +
+          '<div><div style="font-size:12px;color:var(--text-muted)">优先级</div><div><span class="priority-tag ' + task.priority + '">' + task.priority.toUpperCase() + '</span></div></div>' +
+          '<div><div style="font-size:12px;color:var(--text-muted)">负责人</div><div>' + (task.assignee_emoji || '') + ' ' + (task.assignee_name || '未分配') + '</div></div>' +
+          '<div><div style="font-size:12px;color:var(--text-muted)">创建时间</div><div style="font-size:13px">' + task.created_at + '</div></div>' +
+          '</div>' +
+          (task.requirement_title ? '<div style="margin-bottom:16px"><div style="font-size:12px;color:var(--text-muted)">关联需求</div><div><span style="color:var(--accent-blue);cursor:pointer" onclick="viewRequirement(' + task.requirement_id + ')">' + task.requirement_title + '</span></div></div>' : '') +
+          '<div style="margin-bottom:16px"><div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">任务描述</div><div style="background:var(--bg-secondary);padding:16px;border-radius:8px;font-size:14px;line-height:1.6">' + (task.description || '无') + '</div></div>' +
+          resultHtml +
+          '</div>';
+
+        document.getElementById('drawerOverlay').classList.add('show');
+        document.getElementById('taskDrawer').classList.add('show');
+      } catch (e) {
+        showToast('error', '加载失败', e.message);
+      }
+    }
+
+    function closeDrawer() {
+      document.getElementById('drawerOverlay').classList.remove('show');
+      document.getElementById('taskDrawer').classList.remove('show');
+    }
+
+    function openLocalProjectDrawer() {
+      document.getElementById('lpDrawerOverlay').classList.add('show');
+      document.getElementById('localProjectDrawer').classList.add('show');
+    }
+
+    function closeLocalProjectDrawer() {
+      document.getElementById('lpDrawerOverlay').classList.remove('show');
+      document.getElementById('localProjectDrawer').classList.remove('show');
+    }
+
+    async function showLocalProject(projectId) {
+      try {
+        var lp = await api('/api/local-projects/' + projectId);
+        document.getElementById('lpDrawerTitle').textContent = '本地项目: ' + (lp.name || '未命名');
+        var statusLabel = { running: '运行中', stopped: '已停止' };
+        var statusClass = { running: 'running', stopped: 'stopped' };
+        var itemsHtml = '';
+        if (lp.items && lp.items.length > 0) {
+          itemsHtml = '<table style="width:100%;border-collapse:collapse;margin-top:12px"><thead><tr style="border-bottom:1px solid var(--border-color)"><th style="text-align:left;padding:8px 4px;color:var(--text-muted);font-weight:normal;font-size:12px">字段</th><th style="text-align:left;padding:8px 4px;color:var(--text-muted);font-weight:normal;font-size:12px">值</th><th style="width:40px"></th></tr></thead><tbody>';
+          for (var ki = 0; ki < lp.items.length; ki++) {
+            var item = lp.items[ki];
+            itemsHtml += '<tr style="border-bottom:1px solid var(--border-color)"><td style="padding:8px 4px;font-weight:500">' + escapeHtml(item.item_key) + '</td><td style="padding:8px 4px;color:var(--text-muted)">' + escapeHtml(item.item_value) + '</td><td style="padding:8px 4px;text-align:right"><button class="btn-icon btn-icon-danger" onclick="lpDeleteItem(' + projectId + ',' + item.id + ')" title="删除">🗑️</button></td></tr>';
+          }
+          itemsHtml += '</tbody></table>';
+        } else {
+          itemsHtml = '<div style="color:var(--text-muted);font-size:13px;padding:8px 0">暂无配置项</div>';
+        }
+        var html = '<div style="display:flex;flex-direction:column;gap:16px">';
+        html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">';
+        html += '<div class="form-group" style="margin:0"><label class="form-label">项目名称</label><input class="form-input" id="lpName" value="' + escapeHtml(lp.name || '') + '" placeholder="本地项目名称"></div>';
+        html += '<div class="form-group" style="margin:0"><label class="form-label">运行地址</label><input class="form-input" id="lpAddress" value="' + (lp.port ? window.location.hostname + ':' + lp.port : '-') + '" placeholder="IP:端口" readonly style="background:var(--bg-main)"></div>';
+        html += '</div>';
+        html += '<div class="form-group" style="margin:0"><label class="form-label">启动命令</label><input class="form-input" id="lpCommand" value="' + escapeHtml(lp.start_command || '') + '" placeholder="如: node server.js 或 npm start"></div>';
+        html += '<div class="form-group" style="margin:0"><label class="form-label">工作目录</label><input class="form-input" id="lpWorkDir" value="' + escapeHtml(lp.work_dir || '') + '" placeholder="如: /home/myprojects/JavaScript/myapp"></div>';
+        html += '<div style="display:flex;align-items:center;gap:12px">';
+        html += '<span class="status-badge ' + (statusClass[lp.status] || 'stopped') + '">' + (statusLabel[lp.status] || '已停止') + '</span>';
+        if (lp.status === 'running') {
+          html += '<button class="btn btn-danger" onclick="lpStopProject(' + projectId + ')">停止项目</button>';
+        } else {
+          html += '<button class="btn btn-primary" onclick="lpStartProject(' + projectId + ')">启动项目</button>';
+        }
+        html += '<button class="btn btn-secondary" onclick="lpSaveProject(' + projectId + ')">保存配置</button>';
+        html += '</div>';
+        html += '<div style="border-top:1px solid var(--border-color);padding-top:12px">';
+        html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-weight:500;font-size:13px">配置项</span><button class="btn btn-sm btn-secondary" onclick="lpAddItem(' + projectId + ')">+ 添加</button></div>';
+        html += itemsHtml;
+        html += '</div>';
+        html += '</div>';
+        document.getElementById('lpDrawerBody').innerHTML = html;
+        openLocalProjectDrawer();
+      } catch (e) {
+        showToast('error', '加载失败', e.message);
+      }
+    }
+
+    async function lpSaveProject(projectId) {
+      var name = document.getElementById('lpName').value;
+      var start_command = document.getElementById('lpCommand').value;
+      var work_dir = document.getElementById('lpWorkDir').value;
+      try {
+        await api('/api/local-projects/' + projectId, { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name, start_command, work_dir }) });
+        showToast('success', '保存成功');
+      } catch (e) {
+        showToast('error', '保存失败', e.message);
+      }
+    }
+
+    async function lpStartProject(projectId) {
+      try {
+        await lpSaveProject(projectId);
+        var btn = document.querySelector('.btn-primary');
+        if (btn) { btn.disabled = true; btn.textContent = '启动中...'; }
+        await api('/api/local-projects/' + projectId + '/start', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' });
+        showToast('success', '项目启动中', '请等待2-3秒后刷新端口信息');
+        setTimeout(function() { showLocalProject(projectId); }, 3000);
+      } catch (e) {
+        showToast('error', '启动失败', e.message);
+      }
+    }
+
+    async function lpStopProject(projectId) {
+      try {
+        await api('/api/local-projects/' + projectId + '/stop', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' });
+        showToast('success', '已停止');
+        showLocalProject(projectId);
+      } catch (e) {
+        showToast('error', '停止失败', e.message);
+      }
+    }
+
+    async function lpAddItem(projectId) {
+      var key = prompt('请输入字段名称（如：仓库地址）：');
+      if (!key) return;
+      var value = prompt('请输入字段值（如：https://github.com/xxx）：') || '';
+      try {
+        await api('/api/local-projects/' + projectId + '/items', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ item_key: key, item_value: value }) });
+        showLocalProject(projectId);
+      } catch (e) {
+        showToast('error', '添加失败', e.message);
+      }
+    }
+
+    async function lpDeleteItem(projectId, itemId) {
+      try {
+        await api('/api/local-projects/' + projectId + '/items/' + itemId, { method: 'DELETE' });
+        showLocalProject(projectId);
+      } catch (e) {
+        showToast('error', '删除失败', e.message);
+      }
+    }
+
+    // 快速更新任务单个字段
+    async function updateTaskField(taskId, field, value) {
+      try {
+        var body = {};
+        body[field] = value;
+        await api('/api/tasks/' + taskId, { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+        showToast('success', '更新成功');
+        loadTasks();
+        showTaskDrawer(taskId);
+      } catch (e) {
+        showToast('error', '更新失败', e.message);
+      }
+    }
+
+    // 编辑任务
+    async function showEditTask(taskId) {
+      try {
+        var task = await api('/api/tasks/' + taskId);
+        var agentOptions = '<option value="">未分配</option>';
+        for (var i = 0; i < agents.length; i++) {
+          agentOptions += '<option value="' + agents[i].id + '"' + (agents[i].id === task.assignee_id ? ' selected' : '') + '>' + agents[i].emoji + ' ' + agents[i].name + ' (' + agents[i].role + ')</option>';
+        }
+        var reqOptions = '<option value="">无关联需求</option>';
+        for (var i = 0; i < kanbanRequirements.length; i++) {
+          reqOptions += '<option value="' + kanbanRequirements[i].id + '"' + (kanbanRequirements[i].id === task.requirement_id ? ' selected' : '') + '>' + kanbanRequirements[i].title + '</option>';
+        }
+        var statusOptions = '<option value="todo"' + (task.status==='todo'?' selected':'') + '>待执行</option><option value="in_progress"' + (task.status==='in_progress'?' selected':'') + '>进行中</option><option value="done"' + (task.status==='done'?' selected':'') + '>已完成</option>';
+        showModal('编辑任务',
+          '<form onsubmit="updateTask(event,' + taskId + ')"><div class="form-group"><label class="form-label">任务标题</label><input name="title" class="form-input" required value="' + escapeHtml(task.title || '') + '"></div><div class="form-group"><label class="form-label">任务描述</label><textarea name="description" class="form-textarea" placeholder="请描述任务内容">' + escapeHtml(task.description || '') + '</textarea></div><div class="form-group"><label class="form-label">关联需求</label><select name="requirement_id" class="form-select">' + reqOptions + '</select></div><div class="form-group"><label class="form-label">分配给</label><select name="assignee_id" class="form-select">' + agentOptions + '</select></div><div class="form-group"><label class="form-label">状态</label><select name="status" class="form-select">' + statusOptions + '</select></div><div class="form-group"><label class="form-label">优先级</label><select name="priority" class="form-select"><option value="p0"' + (task.priority==='p0'?' selected':'') + '>P0 - 紧急</option><option value="p1"' + (task.priority==='p1'?' selected':'') + '>P1 - 高</option><option value="p2"' + (task.priority==='p2'?' selected':'') + '>P2 - 中</option></select></div></form>',
+          '<button type="button" class="btn btn-secondary" onclick="closeModal()">取消</button><button type="submit" class="btn btn-primary">保存</button>'
+        );
+      } catch (e) {
+        showToast('error', '加载失败', e.message);
+      }
+    }
+
+    function updateTask(e, taskId) {
+      e.preventDefault();
+      var form = e.target;
+      api('/api/tasks/' + taskId, {
+        method: 'PATCH',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          title: form.title.value,
+          description: form.description.value,
+          requirement_id: form.requirement_id.value || null,
+          assignee_id: form.assignee_id.value || null,
+          status: form.status.value,
+          priority: form.priority.value
+        })
+      }).then(function() {
+        closeModal();
+        closeDrawer();
+        showToast('success', '保存成功', '任务已更新');
+        loadTasks();
+      }).catch(function(e) { showToast('error', '保存失败', e.message); });
+    }
+
+    // 删除任务
+    function deleteTask(taskId) {
+      if (!confirm('确定要删除这个任务吗？')) return;
+      api('/api/tasks/' + taskId, { method: 'DELETE' }).then(function() {
+        closeDrawer();
+        showToast('success', '已删除');
+        loadTasks();
+      }).catch(function(e) { showToast('error', '删除失败', e.message); });
+    }
+
+    function escapeHtml(text) {
+      if (!text) return '';
+      return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function viewRequirement(reqId) {
+      closeDrawer();
+      switchView('requirements');
+      setTimeout(function() { showRequirementDrawer(reqId); }, 100);
+    }
+
+    function showCreateTask(reqId) {
+      var agentOptions = '<option value="">未分配</option>';
+      for (var i = 0; i < agents.length; i++) {
+        agentOptions += '<option value="' + agents[i].id + '">' + agents[i].emoji + ' ' + agents[i].name + ' (' + agents[i].role + ')</option>';
+      }
+      closeModal();
+      showModal('添加任务',
+        '<form onsubmit="createTask(event,' + reqId + ')"><div class="form-group"><label class="form-label">任务标题</label><input name="title" class="form-input" required placeholder="请输入任务标题"></div><div class="form-group"><label class="form-label">任务描述</label><textarea name="description" class="form-textarea" placeholder="请描述任务内容"></textarea></div><div class="form-group"><label class="form-label">分配给</label><select name="assignee_id" class="form-select">' + agentOptions + '</select></div><div class="form-group"><label class="form-label">预估工时 (小时)</label><input name="estimated_hours" class="form-input" type="number" placeholder="预估工时"></div></form>',
+        '<button type="button" class="btn btn-secondary" onclick="closeModal()">取消</button><button type="submit" class="btn btn-primary">创建任务</button>'
+      );
+    }
+
+    function createTask(e, reqId) {
+      e.preventDefault();
+      var form = e.target;
+      api('/api/requirements/' + reqId + '/tasks', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({title:form.title.value, description:form.description.value, assignee_id:form.assignee_id.value||null, estimated_hours:form.estimated_hours.value||null})
+      }).then(function() {
+        closeModal();
+        showToast('success', '创建成功', '任务已创建');
+        loadRequirements();
+      }).catch(function(e) { showToast('error', '创建失败', e.message); });
+    }
+
+    function showAgentDetail(agentId) {
+      for (var i = 0; i < agents.length; i++) {
+        if (agents[i].id === agentId) {
+          var agent = agents[i];
+          var statusText = agent.status === 'idle' ? '空闲' : agent.status === 'busy' ? '工作中' : '已暂停';
+          showModal(agent.emoji + ' ' + agent.name,
+            '<div style="margin-bottom:20px"><div style="font-size:14px;color:var(--text-secondary)">' + agent.role + '</div><div style="margin-top:12px"><span class="status-badge ' + agent.status + '">' + statusText + '</span></div></div><div class="form-group"><label class="form-label">当前状态</label><div style="font-size:15px">' + (agent.current_action || '空闲中') + '</div><div style="font-size:13px;color:var(--text-muted);margin-top:4px">' + (agent.current_detail || '') + '</div></div><div class="form-group"><label class="form-label">工作进度</label><div class="progress-bar" style="margin:8px 0"><div class="progress-fill" style="width:' + (agent.progress||0) + '%"></div></div><div style="text-align:right;font-size:13px">' + (agent.progress||0) + '%</div></div>',
+            '<button class="btn btn-secondary" onclick="closeModal()">关闭</button>'
+          );
+          return;
+        }
+      }
+    }
+
+
+    // System Info
+    async function loadSystemInfo() {
+      try {
+        var sysConfig = await api('/api/system/config');
+        var health = await api('/api/system/health');
+        var allAgents = await api('/api/agents');
+
+        // 统计卡片
+        document.getElementById('statsGrid').innerHTML =
+          '<div class="stat-card"><div class="stat-card-icon" style="background:rgba(99,102,241,0.2);color:#6366f1">👥</div><div class="stat-card-value">' + health.stats.agents.count + '</div><div class="stat-card-label">Agent 数量</div></div>' +
+          '<div class="stat-card"><div class="stat-card-icon" style="background:rgba(245,158,11,0.2);color:#f59e0b">🎯</div><div class="stat-card-value">' + health.stats.requirements.count + '</div><div class="stat-card-label">需求数量</div></div>' +
+          '<div class="stat-card"><div class="stat-card-icon" style="background:rgba(34,197,94,0.2);color:#22c55e">📋</div><div class="stat-card-value">' + health.stats.tasks.count + '</div><div class="stat-card-label">任务数量</div></div>';
+
+        // Agent 列表
+        var agentHtml = '';
+        for (var i = 0; i < allAgents.length; i++) {
+          var ag = allAgents[i];
+          var statusText = ag.status === 'idle' ? '空闲' : ag.status === 'busy' ? '工作中' : '已暂停';
+          agentHtml += '<tr>';
+          agentHtml += '<td><span style="margin-right:8px">' + ag.emoji + '</span>' + ag.name + '</td>';
+          agentHtml += '<td>' + ag.role + '</td>';
+          agentHtml += '<td><span class="status-badge ' + ag.status + '">' + statusText + '</span></td>';
+          agentHtml += '<td>' + (ag.current_action || '<span style="color:var(--text-muted)">-</span>') + '</td>';
+          agentHtml += '<td>' + (ag.workload || 0) + '%</td>';
+          agentHtml += '</tr>';
+        }
+        document.getElementById('agentListBody').innerHTML = agentHtml;
+
+        // 系统信息表
+        var infoHtml = '';
+        for (var j = 0; j < sysConfig.length; j++) {
+          var info = sysConfig[j];
+          infoHtml += '<tr><td>' + info.info_key + '</td><td>' + info.info_value + '</td></tr>';
+        }
+        document.getElementById('systemInfoBody').innerHTML = infoHtml;
+      } catch (e) { console.error('Failed to load system info:', e); }
+    }
+
+    // Projects
+    var projectPager = { page: 1, total: 0, totalPages: 0, list: [] };
+
+    async function loadProjects() {
+      var search = document.getElementById('projectSearch').value;
+      var sort = document.getElementById('projectSort').value;
+      try {
+        var result = await api('/api/projects?search=' + encodeURIComponent(search) + '&sort=' + sort + '&page=' + projectPager.page);
+        projectPager = result;
+        renderProjects();
+      } catch (e) {
+        console.error('Failed to load projects:', e);
+      }
+    }
+
+    function searchProjects() {
+      projectPager.page = 1;
+      loadProjects();
+    }
+
+    function goToProjectPage(p) {
+      projectPager.page = p;
+      loadProjects();
+    }
+
+    function renderProjects() {
+      var tbody = document.getElementById('projectsTableBody');
+      var list = projectPager.list || [];
+
+      if (list.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text-muted)">暂无项目</td></tr>';
+      } else {
+        var phaseMap = {start: 'Start', alpha: 'Alpha', beta: 'Beta', rc: 'RC'};
+        var statusMap = {pending: '未开始', active: '进行中', ended: '已结束'};
+        var statusClass = {pending: 'pending', active: 'in_progress', ended: 'done'};
+
+        var html = '';
+        for (var i = 0; i < list.length; i++) {
+          var p = list[i];
+          var desc = p.description && p.description.length > 40 ? p.description.substring(0, 40) + '...' : (p.description || '-');
+          html += '<tr>';
+          html += '<td>#' + p.id + '</td>';
+          html += '<td style="font-weight:500">' + escapeHtml(p.name) + '</td>';
+          html += '<td style="color:var(--text-muted);font-size:12px" title="' + escapeHtml(p.description || '') + '">' + escapeHtml(desc) + '</td>';
+          html += '<td><a href="javascript:void(0)" onclick="showLocalProject(' + p.id + ')" style="color:var(--accent-blue);text-decoration:none">详情</a></td>';
+          html += '<td><span class="code-tag">' + p.code.split('').join('&nbsp;') + '</span></td>';
+          html += '<td><span class="phase-tag">' + (phaseMap[p.phase] || p.phase) + '</span></td>';
+          html += '<td><span class="status-badge ' + (statusClass[p.status] || p.status) + '">' + (statusMap[p.status] || p.status) + '</span></td>';
+          html += '<td style="font-size:12px">' + p.created_at + '</td>';
+          html += '<td style="font-size:12px">' + p.updated_at + '</td>';
+          html += '<td><button class="btn-icon btn-icon-danger" onclick="showEditProject(' + p.id + ')" title="编辑">✏️</button><button class="btn-icon btn-icon-danger" onclick="deleteProject(' + p.id + ')" title="删除">🗑️</button></td>';
+          html += '</tr>';
+        }
+        tbody.innerHTML = html;
+      }
+
+      // 分页
+      document.getElementById('projectPagerInfo').textContent = '共 ' + projectPager.total + ' 条';
+      var pagerHtml = '';
+      if (projectPager.totalPages > 1) {
+        if (projectPager.page > 1) pagerHtml += '<button class="btn btn-sm" onclick="goToProjectPage(' + (projectPager.page - 1) + ')">‹</button>';
+        for (var pg = 1; pg <= projectPager.totalPages; pg++) {
+          if (pg === 1 || pg === projectPager.totalPages || (pg >= projectPager.page - 1 && pg <= projectPager.page + 1)) {
+            pagerHtml += '<button class="btn btn-sm' + (pg === projectPager.page ? ' btn-primary' : '') + '" onclick="goToProjectPage(' + pg + ')">' + pg + '</button>';
+          } else if (pg === projectPager.page - 2 || pg === projectPager.page + 2) {
+            pagerHtml += '<span style="padding:4px">...</span>';
+          }
+        }
+        if (projectPager.page < projectPager.totalPages) pagerHtml += '<button class="btn btn-sm" onclick="goToProjectPage(' + (projectPager.page + 1) + ')">›</button>';
+      }
+      document.getElementById('projectPager').innerHTML = pagerHtml;
+    }
+
+    function showCreateProject() {
+      showModal('新建项目',
+        '<form onsubmit="createProject(event)"><div class="form-group"><label class="form-label">项目名称</label><input name="name" class="form-input" required placeholder="请输入项目名称"></div><div class="form-group"><label class="form-label">项目描述</label><textarea name="description" class="form-textarea" placeholder="请输入项目描述（可选）"></textarea></div><div class="form-group"><label class="form-label">阶段</label><select name="phase" class="form-select"><option value="start">Start</option><option value="alpha">Alpha</option><option value="beta">Beta</option><option value="rc">RC</option></select></div><div class="form-group"><label class="form-label">状态</label><select name="status" class="form-select"><option value="pending">未开始</option><option value="active">进行中</option><option value="ended">已结束</option></select></div></form>',
+        '<button type="button" class="btn btn-secondary" onclick="closeModal()">取消</button><button type="submit" class="btn btn-primary">创建</button>'
+      );
+    }
+
+    function createProject(e) {
+      e.preventDefault();
+      var form = e.target;
+      api('/api/projects', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          name: form.name.value,
+          description: form.description.value,
+          phase: form.phase.value,
+          status: form.status.value
+        })
+      }).then(function() {
+        closeModal();
+        showToast('success', '创建成功', '项目已创建');
+        loadProjects();
+      }).catch(function(e) {
+        showToast('error', '创建失败', e.message);
+      });
+    }
+
+    async function showEditProject(id) {
+      try {
+        var p = await api('/api/projects/' + id);
+        showModal('编辑项目',
+          '<div id="editProjectForm"><div class="form-group"><label class="form-label">项目名称</label><input id="ep-name" class="form-input" required value="' + escapeHtml(p.name) + '"></div><div class="form-group"><label class="form-label">项目描述</label><textarea id="ep-desc" class="form-textarea">' + escapeHtml(p.description || '') + '</textarea></div><div class="form-group"><label class="form-label">阶段</label><select id="ep-phase" class="form-select"><option value="start"' + (p.phase === 'start' ? ' selected' : '') + '>Start</option><option value="alpha"' + (p.phase === 'alpha' ? ' selected' : '') + '>Alpha</option><option value="beta"' + (p.phase === 'beta' ? ' selected' : '') + '>Beta</option><option value="rc"' + (p.phase === 'rc' ? ' selected' : '') + '>RC</option></select></div><div class="form-group"><label class="form-label">状态</label><select id="ep-status" class="form-select"><option value="pending"' + (p.status === 'pending' ? ' selected' : '') + '>未开始</option><option value="active"' + (p.status === 'active' ? ' selected' : '') + '>进行中</option><option value="ended"' + (p.status === 'ended' ? ' selected' : '') + '>已结束</option></select></div></div>',
+          '<button type="button" class="btn btn-secondary" onclick="closeModal()">取消</button><button type="button" class="btn btn-primary" onclick="submitEditProject(' + id + ')">保存</button>'
+        );
+      } catch (e) {
+        showToast('error', '加载失败', e.message);
+      }
+    }
+
+    function submitEditProject(id) {
+      var name = document.getElementById('ep-name').value;
+      var desc = document.getElementById('ep-desc').value;
+      var phase = document.getElementById('ep-phase').value;
+      var status = document.getElementById('ep-status').value;
+      if (!name) {
+        showToast('error', '错误', '项目名称不能为空');
+        return;
+      }
+      api('/api/projects/' + id, {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name: name, description: desc, phase: phase, status: status})
+      }).then(function() {
+        closeModal();
+        showToast('success', '更新成功', '项目已更新');
+        loadProjects();
+      }).catch(function(e) {
+        showToast('error', '更新失败', e.message);
+      });
+    }
+
+    function deleteProject(id) {
+      if (!confirm('确定要删除该项目吗？')) return;
+      api('/api/projects/' + id, { method: 'DELETE' })
+        .then(function() {
+          showToast('success', '删除成功', '项目已删除');
+          loadProjects();
+        }).catch(function(e) {
+          showToast('error', '删除失败', e.message);
+        });
+    }
+
+    // Requirements
+    var reqPager = { page: 1, total: 0, totalPages: 0, list: [] };
+
+    async function loadRequirements() {
+      var search = document.getElementById('reqSearch').value;
+      var projectId = document.getElementById('reqProjectFilter').value;
+      var status = document.getElementById('reqStatusFilter').value;
+      var sort = document.getElementById('reqSort').value;
+      try {
+        var url = '/api/requirements?search=' + encodeURIComponent(search) + '&sort=' + sort + '&page=' + reqPager.page;
+        if (projectId) url += '&project_id=' + projectId;
+        if (status) url += '&status=' + status;
+        var result = await api(url);
+        reqPager = result;
+        renderRequirements();
+      } catch (e) {
+        console.error('Failed to load requirements:', e);
+      }
+    }
+
+    function searchRequirements() {
+      reqPager.page = 1;
+      loadRequirements();
+    }
+
+    function goToReqPage(p) {
+      reqPager.page = p;
+      loadRequirements();
+    }
+
+    function loadProjectsForReq() {
+      api('/api/requirements/meta/projects').then(function(projects) {
+        var sel = document.getElementById('reqProjectFilter');
+        var currentVal = sel.value;
+        var html = '<option value="">全部项目</option>';
+        for (var i = 0; i < projects.length; i++) {
+          html += '<option value="' + projects[i].id + '">' + projects[i].name + '</option>';
+        }
+        sel.innerHTML = html;
+        sel.value = currentVal;
+      }).catch(function(e) { console.error(e); });
+    }
+
+    function renderRequirements() {
+      var tbody = document.getElementById('requirementsTableBody');
+      var list = reqPager.list || [];
+
+      var statusMap = {
+        review: { text: '待评审', class: 'pending' },
+        in_progress: { text: '进行中', class: 'in_progress' },
+        done: { text: '已完成', class: 'done' }
+      };
+      var priorityMap = { p0: 'P0', p1: 'P1', p2: 'P2' };
+
+      if (list.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text-muted)">暂无需求</td></tr>';
+      } else {
+        var html = '';
+        for (var i = 0; i < list.length; i++) {
+          var r = list[i];
+          var st = statusMap[r.status] || { text: r.status, class: '' };
+          var planTime = '-';
+          if (r.plan_start_time || r.plan_end_time) {
+            var s = r.plan_start_time ? r.plan_start_time.split(' ')[0] : '-';
+            var e = r.plan_end_time ? r.plan_end_time.split(' ')[0] : '-';
+            planTime = s + ' ~ ' + e;
+          }
+          html += '<tr>';
+          html += '<td>#' + r.id + '</td>';
+          html += '<td style="font-weight:500;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;color:var(--accent-blue)" title="' + escapeHtml(r.title) + '" onclick="showRequirementDrawer(' + r.id + ')">' + escapeHtml(r.title) + '</td>';
+          html += '<td style="font-size:12px">' + (r.project_name ? '<span style="color:var(--accent-blue);cursor:pointer" onclick="showProjectDrawer(' + r.project_id + ')"><span class="code-tag" style="font-size:10px">' + r.project_code + '</span> ' + escapeHtml(r.project_name) + '</span>' : '<span style="color:var(--text-muted)">-</span>') + '</td>';
+          html += '<td><span class="priority-tag ' + r.priority + '">' + (priorityMap[r.priority] || r.priority) + '</span></td>';
+          html += '<td><span class="status-badge ' + st.class + '">' + st.text + '</span></td>';
+          html += '<td>' + (r.owner_emoji || '') + ' ' + (r.owner_name || '<span style="color:var(--text-muted)">-</span>') + '</td>';
+          html += '<td style="font-size:12px;color:var(--text-muted)">' + planTime + '</td>';
+          html += '<td style="font-size:12px">' + r.created_at + '</td>';
+          html += '<td><button class="btn-icon"' + (r.status === 'review' ? ' onclick="reviewRequirement(' + r.id + ')"' : ' disabled style="opacity:0.3;cursor:not-allowed"') + ' title="评审">📋</button><button class="btn-icon" onclick="showEditRequirement(' + r.id + ')" title="编辑">✏️</button><button class="btn-icon btn-icon-danger" onclick="deleteRequirement(' + r.id + ')" title="删除">🗑️</button></td>';
+          html += '</tr>';
+        }
+        tbody.innerHTML = html;
+      }
+
+      document.getElementById('reqPagerInfo').textContent = '共 ' + reqPager.total + ' 条';
+      var pagerHtml = '';
+      if (reqPager.totalPages > 1) {
+        if (reqPager.page > 1) pagerHtml += '<button class="btn btn-sm" onclick="goToReqPage(' + (reqPager.page - 1) + ')">‹</button>';
+        for (var pg = 1; pg <= reqPager.totalPages; pg++) {
+          if (pg === 1 || pg === reqPager.totalPages || (pg >= reqPager.page - 1 && pg <= reqPager.page + 1)) {
+            pagerHtml += '<button class="btn btn-sm' + (pg === reqPager.page ? ' btn-primary' : '') + '" onclick="goToReqPage(' + pg + ')">' + pg + '</button>';
+          } else if (pg === reqPager.page - 2 || pg === reqPager.page + 2) {
+            pagerHtml += '<span style="padding:4px">...</span>';
+          }
+        }
+        if (reqPager.page < reqPager.totalPages) pagerHtml += '<button class="btn btn-sm" onclick="goToReqPage(' + (reqPager.page + 1) + ')">›</button>';
+      }
+      document.getElementById('reqPager').innerHTML = pagerHtml;
+    }
+
+    // 需求详情抽屉
+    async function showRequirementDrawer(id) {
+      try {
+        var req = await api('/api/requirements/' + id);
+        var statusMap = {
+          review: { text: '待评审', class: 'pending' },
+          in_progress: { text: '进行中', class: 'in_progress' },
+          done: { text: '已完成', class: 'done' }
+        };
+        var st = statusMap[req.status] || { text: req.status, class: '' };
+
+        // Timeline
+        var timelineHtml = '<div class="timeline">';
+        timelineHtml += '<div class="timeline-item done"><div class="timeline-dot"></div><div class="timeline-content"><div class="timeline-title">创建需求</div><div class="timeline-time">' + (req.created_at || '') + '</div></div></div>';
+        if (req.review_time) {
+          timelineHtml += '<div class="timeline-item done"><div class="timeline-dot"></div><div class="timeline-content"><div class="timeline-title">评审通过</div><div class="timeline-time">' + req.review_time + '</div></div></div>';
+        }
+        if (req.status === 'in_progress' || req.status === 'done') {
+          timelineHtml += '<div class="timeline-item done"><div class="timeline-dot"></div><div class="timeline-content"><div class="timeline-title">开始开发</div><div class="timeline-time">' + (req.updated_at || '') + '</div></div></div>';
+        }
+        if (req.status === 'done' && req.completed_at) {
+          timelineHtml += '<div class="timeline-item done"><div class="timeline-dot"></div><div class="timeline-content"><div class="timeline-title">已完成</div><div class="timeline-time">' + req.completed_at + '</div></div></div>';
+        }
+        timelineHtml += '</div>';
+
+        var planTime = '-';
+        if (req.plan_start_time || req.plan_end_time) {
+          var s = req.plan_start_time ? req.plan_start_time.split(' ')[0] : '-';
+          var e = req.plan_end_time ? req.plan_end_time.split(' ')[0] : '-';
+          planTime = s + ' 至 ' + e;
+        }
+
+        document.getElementById('drawerTitle').textContent = '需求 #' + req.id + ': ' + req.title;
+        document.getElementById('drawerBody').innerHTML =
+          '<div style="padding:20px">' +
+          '<div style="margin-bottom:20px"><span class="priority-tag ' + req.priority + '">' + (req.priority || '').toUpperCase() + '</span> <span class="status-badge ' + st.class + '">' + st.text + '</span></div>' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px">' +
+          '<div><div style="font-size:12px;color:var(--text-muted)">负责人</div><div>' + (req.owner_emoji || '') + ' ' + (req.owner_name || '<span style="color:var(--text-muted)">未分配</span>') + '</div></div>' +
+          '<div><div style="font-size:12px;color:var(--text-muted)">关联项目</div><div>' + (req.project_name ? '<span class="code-tag" style="font-size:10px;cursor:pointer" onclick="closeDrawer();setTimeout(function(){showProjectDrawer(' + req.project_id + ')},100)">' + (req.project_code || '') + '</span> <span style="cursor:pointer;color:var(--accent-blue)" onclick="closeDrawer();setTimeout(function(){showProjectDrawer(' + req.project_id + ')},100)">' + req.project_name + '</span>' : '<span style="color:var(--text-muted)">-</span>') + '</div></div>' +
+          '<div><div style="font-size:12px;color:var(--text-muted)">计划时间</div><div>' + planTime + '</div></div>' +
+          '<div><div style="font-size:12px;color:var(--text-muted)">创建时间</div><div style="font-size:13px">' + (req.created_at || '') + '</div></div>' +
+          '</div>' +
+          '<div style="margin-bottom:16px"><div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">需求描述</div><div style="background:var(--bg-secondary);padding:16px;border-radius:8px;font-size:14px;line-height:1.6">' + (req.description || '无描述') + '</div></div>' +
+          '<div style="margin-top:24px"><div style="font-size:14px;font-weight:600;margin-bottom:12px">👥 需求成员</div>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:8px">' +
+          (function() {
+            var memberHtml = '';
+            if (req.members && req.members.length > 0) {
+              for (var mi = 0; mi < req.members.length; mi++) {
+                var m = req.members[mi];
+                memberHtml += '<div style="display:inline-flex;align-items:center;gap:4px;padding:6px 12px;background:var(--bg-secondary);border-radius:20px;font-size:13px"><span>' + (m.agent_emoji || '') + '</span><span>' + (m.agent_name || '') + '</span><span style="color:var(--text-muted);font-size:11px">(' + (m.agent_role || '') + ')</span></div>';
+              }
+            } else {
+              memberHtml = '<span style="color:var(--text-muted);font-size:13px">暂无成员</span>';
+            }
+            return memberHtml;
+          })() + '</div></div>' +
+          '<div style="margin-top:24px"><div style="font-size:14px;font-weight:600;margin-bottom:16px">📋 评审进度</div>' + timelineHtml + '</div>' +
+          '<div style="margin-top:24px;text-align:right">' + (req.status === 'review' ? '<button class="btn btn-primary" onclick="reviewRequirement(' + req.id + ')">通过评审</button>' : '') + '</div>' +
+          '</div>';
+
+        document.getElementById('drawerOverlay').classList.add('show');
+        document.getElementById('taskDrawer').classList.add('show');
+      } catch (e) {
+        showToast('error', '加载失败', e.message);
+      }
+    }
+
+    // 评审需求
+    function reviewRequirement(id) {
+      closeDrawer();
+      api('/api/requirements/' + id + '/review', { method: 'POST' }).then(function(data) {
+        showToast('success', '评审成功', data.message || '需求评审通过，已自动生成技术方案');
+        loadRequirements();
+        if (currentView === 'tech') loadTechPlans();
+      }).catch(function(e) {
+        showToast('error', '评审失败', e.message);
+      });
+    }
+
+    // 项目详情抽屉
+    async function showProjectDrawer(projectId) {
+      try {
+        var project = await api('/api/projects/' + projectId);
+        var phaseMap = {start: 'Start', alpha: 'Alpha', beta: 'Beta', rc: 'RC'};
+        var phaseStatusMap = {start: '起始阶段', alpha: 'Alpha阶段', beta: 'Beta阶段', rc: 'RC阶段'};
+        var statusMap = {pending: '未开始', active: '进行中', ended: '已结束'};
+
+        document.getElementById('drawerTitle').textContent = '项目 #' + project.id + ': ' + project.name;
+        document.getElementById('drawerBody').innerHTML =
+          '<div style="padding:20px">' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px">' +
+          '<div><div style="font-size:12px;color:var(--text-muted)">项目编码</div><div><span class="code-tag" style="font-size:14px">' + project.code + '</span></div></div>' +
+          '<div><div style="font-size:12px;color:var(--text-muted)">项目阶段</div><div><span class="phase-tag">' + (phaseMap[project.phase] || project.phase) + '</span> ' + (phaseStatusMap[project.phase] || '') + '</div></div>' +
+          '<div><div style="font-size:12px;color:var(--text-muted)">当前状态</div><div><span class="status-badge ' + (project.status === 'active' ? 'in_progress' : project.status === 'pending' ? 'pending' : 'done') + '">' + (statusMap[project.status] || project.status) + '</span></div></div>' +
+          '<div><div style="font-size:12px;color:var(--text-muted)">创建时间</div><div style="font-size:13px">' + (project.created_at || '') + '</div></div>' +
+          '</div>' +
+          '<div style="margin-bottom:16px"><div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">项目描述</div><div style="background:var(--bg-secondary);padding:16px;border-radius:8px;font-size:14px;line-height:1.6">' + (project.description || '无描述') + '</div></div>' +
+          '</div>';
+
+        document.getElementById('drawerOverlay').classList.add('show');
+        document.getElementById('taskDrawer').classList.add('show');
+      } catch (e) {
+        showToast('error', '加载失败', e.message);
+      }
+    }
+
+    function showCreateRequirement() {
+      var agentOptions = '<option value="">未分配</option>';
+      var projectOptions = '<option value="">无关联项目</option>';
+
+      for (var i = 0; i < agents.length; i++) {
+        agentOptions += '<option value="' + agents[i].id + '">' + agents[i].emoji + ' ' + agents[i].name + '</option>';
+      }
+
+      // 构建需求成员选择表格
+      var membersHtml = '<div id="req-members"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:var(--bg-secondary)"><th style="padding:8px;text-align:left;width:40%">角色</th><th style="padding:8px;text-align:left">成员</th></tr></thead><tbody>';
+      for (var i = 0; i < agents.length; i++) {
+        var ag = agents[i];
+        membersHtml += '<tr><td style="padding:8px;border-bottom:1px solid var(--border-color)"><label style="display:flex;align-items:center;cursor:pointer"><input type="checkbox" data-agent-id="' + ag.id + '" data-agent-name="' + ag.name + '" data-role="' + ag.role + '" style="margin-right:8px">' + ag.emoji + ' ' + ag.role + '</label></td><td style="padding:8px;border-bottom:1px solid var(--border-color);color:var(--text-muted)">' + ag.name + '</td></tr>';
+      }
+      membersHtml += '</tbody></table></div>';
+
+      showModal('新建需求',
+        '<div id="createReqForm"><div class="form-group"><label class="form-label">需求名称 <span style="color:red">*</span></label><input id="cr-title" class="form-input" required placeholder="请输入需求名称"></div><div class="form-group"><label class="form-label">需求描述</label><textarea id="cr-desc" class="form-textarea" placeholder="请描述需求内容"></textarea></div><div class="form-group"><label class="form-label">关联项目</label><select id="cr-project" class="form-select">' + projectOptions + '</select></div><div class="form-group"><label class="form-label">负责人</label><select id="cr-owner" class="form-select">' + agentOptions + '</select></div><div class="form-group"><label class="form-label">优先级</label><select id="cr-priority" class="form-select"><option value="p0">P0 - 紧急</option><option value="p1">P1 - 高</option><option value="p2" selected>P2 - 中</option></select></div><div class="form-group"><label class="form-label">计划开始时间</label><input id="cr-plan-start" class="form-input" type="date"></div><div class="form-group"><label class="form-label">计划完成时间</label><input id="cr-plan-end" class="form-input" type="date"></div><div class="form-group"><label class="form-label">需求成员</label>' + membersHtml + '</div></div>',
+        '<button type="button" class="btn btn-secondary" onclick="closeModal()">取消</button><button type="button" class="btn btn-primary" onclick="submitCreateRequirement()">创建</button>'
+      );
+      loadProjectsForReqForm();
+    }
+
+    function loadProjectsForReqForm() {
+      api('/api/requirements/meta/projects').then(function(projects) {
+        var sel = document.getElementById('cr-project');
+        var html = '<option value="">无关联项目</option>';
+        for (var i = 0; i < projects.length; i++) {
+          html += '<option value="' + projects[i].id + '">' + projects[i].name + '</option>';
+        }
+        sel.innerHTML = html;
+      }).catch(function(e) { console.error(e); });
+    }
+
+    // 获取需求成员（支持创建和编辑两种容器）
+    function getSelectedMembers() {
+      var members = [];
+      var checkboxes = document.querySelectorAll('#req-members input[type="checkbox"]:checked, #edit-req-members input[type="checkbox"]:checked');
+      for (var i = 0; i < checkboxes.length; i++) {
+        var cb = checkboxes[i];
+        members.push({
+          agent_id: cb.dataset.agentId,
+          role: cb.dataset.role
+        });
+      }
+      return members;
+    }
+
+    function submitCreateRequirement() {
+      var title = document.getElementById('cr-title').value;
+      var desc = document.getElementById('cr-desc').value;
+      var projectId = document.getElementById('cr-project').value;
+      var ownerId = document.getElementById('cr-owner').value;
+      var priority = document.getElementById('cr-priority').value;
+      var planStart = document.getElementById('cr-plan-start').value;
+      var planEnd = document.getElementById('cr-plan-end').value;
+      var members = getSelectedMembers();
+
+      if (!title) {
+        showToast('error', '错误', '需求名称不能为空');
+        return;
+      }
+
+      api('/api/requirements', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          title: title,
+          description: desc,
+          project_id: projectId || null,
+          owner_id: ownerId || null,
+          priority: priority,
+          plan_start_time: planStart || null,
+          plan_end_time: planEnd || null,
+          members: members
+        })
+      }).then(function() {
+        closeModal();
+        showToast('success', '创建成功', '需求已创建');
+        loadRequirements();
+      }).catch(function(e) {
+        showToast('error', '创建失败', e.message);
+      });
+    }
+
+    async function showEditRequirement(id) {
+      try {
+        var r = await api('/api/requirements/' + id);
+        var agentOptions = '<option value="">未分配</option>';
+        for (var i = 0; i < agents.length; i++) {
+          agentOptions += '<option value="' + agents[i].id + '">' + agents[i].emoji + ' ' + agents[i].name + '</option>';
+        }
+        var statusOptions = '<option value="review"' + (r.status === 'review' ? ' selected' : '') + '>待评审</option><option value="in_progress"' + (r.status === 'in_progress' ? ' selected' : '') + '>进行中</option><option value="done"' + (r.status === 'done' ? ' selected' : '') + '>已完成</option>';
+
+        // 获取已有成员
+        var existingMembers = r.members || [];
+        var memberIds = {};
+        for (var m = 0; m < existingMembers.length; m++) {
+          memberIds[existingMembers[m].agent_id] = true;
+        }
+
+        // 构建需求成员选择表格
+        var membersHtml = '<div id="edit-req-members"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="background:var(--bg-secondary)"><th style="padding:8px;text-align:left;width:40%">角色</th><th style="padding:8px;text-align:left">成员</th></tr></thead><tbody>';
+        for (var i = 0; i < agents.length; i++) {
+          var ag = agents[i];
+          var checked = memberIds[ag.id] ? 'checked' : '';
+          membersHtml += '<tr><td style="padding:8px;border-bottom:1px solid var(--border-color)"><label style="display:flex;align-items:center;cursor:pointer"><input type="checkbox" data-agent-id="' + ag.id + '" data-agent-name="' + ag.name + '" data-role="' + ag.role + '" style="margin-right:8px" ' + checked + '>' + ag.emoji + ' ' + ag.role + '</label></td><td style="padding:8px;border-bottom:1px solid var(--border-color);color:var(--text-muted)">' + ag.name + '</td></tr>';
+        }
+        membersHtml += '</tbody></table></div>';
+
+        showModal('编辑需求',
+          '<div id="editReqForm"><div class="form-group"><label class="form-label">需求名称 <span style="color:red">*</span></label><input id="er-title" class="form-input" required value="' + escapeHtml(r.title) + '"></div><div class="form-group"><label class="form-label">需求描述</label><textarea id="er-desc" class="form-textarea">' + escapeHtml(r.description || '') + '</textarea></div><div class="form-group"><label class="form-label">负责人</label><select id="er-owner" class="form-select">' + agentOptions.replace('value="' + (r.owner_id || '') + '"', 'value="' + (r.owner_id || '') + '" selected') + '</select></div><div class="form-group"><label class="form-label">优先级</label><select id="er-priority" class="form-select"><option value="p0"' + (r.priority === 'p0' ? ' selected' : '') + '>P0 - 紧急</option><option value="p1"' + (r.priority === 'p1' ? ' selected' : '') + '>P1 - 高</option><option value="p2"' + (r.priority === 'p2' ? ' selected' : '') + '>P2 - 中</option></select></div><div class="form-group"><label class="form-label">状态</label><select id="er-status" class="form-select">' + statusOptions + '</select></div><div class="form-group"><label class="form-label">计划开始时间</label><input id="er-plan-start" class="form-input" type="date" value="' + (r.plan_start_time ? r.plan_start_time.split(' ')[0] : '') + '"></div><div class="form-group"><label class="form-label">计划完成时间</label><input id="er-plan-end" class="form-input" type="date" value="' + (r.plan_end_time ? r.plan_end_time.split(' ')[0] : '') + '"></div><div class="form-group"><label class="form-label">需求成员</label>' + membersHtml + '</div></div>',
+          '<button type="button" class="btn btn-secondary" onclick="closeModal()">取消</button><button type="button" class="btn btn-primary" onclick="submitEditRequirement(' + id + ')">保存</button>'
+        );
+      } catch (e) {
+        showToast('error', '加载失败', e.message);
+      }
+    }
+
+    function submitEditRequirement(id) {
+      var title = document.getElementById('er-title').value;
+      var desc = document.getElementById('er-desc').value;
+      var ownerId = document.getElementById('er-owner').value;
+      var priority = document.getElementById('er-priority').value;
+      var status = document.getElementById('er-status').value;
+      var planStart = document.getElementById('er-plan-start').value;
+      var planEnd = document.getElementById('er-plan-end').value;
+      var members = getSelectedMembers();
+
+      if (!title) {
+        showToast('error', '错误', '需求名称不能为空');
+        return;
+      }
+
+      api('/api/requirements/' + id, {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          title: title,
+          description: desc,
+          owner_id: ownerId || null,
+          priority: priority,
+          status: status,
+          plan_start_time: planStart || null,
+          plan_end_time: planEnd || null,
+          members: members
+        })
+      }).then(function() {
+        closeModal();
+        showToast('success', '更新成功', '需求已更新');
+        loadRequirements();
+      }).catch(function(e) {
+        showToast('error', '更新失败', e.message);
+      });
+    }
+
+    function deleteRequirement(id) {
+      if (!confirm('确定要删除该需求吗？')) return;
+      api('/api/requirements/' + id, { method: 'DELETE' })
+        .then(function() {
+          showToast('success', '删除成功', '需求已删除');
+          loadRequirements();
+        }).catch(function(e) {
+          showToast('error', '删除失败', e.message);
+        });
+    }
+
+    // ===== 技术方案管理 =====
+    var techPlansPage = 1;
+
+    function loadTechPlans(page) {
+      if (page !== undefined) techPlansPage = page;
+      var search = document.getElementById('tpSearch').value;
+      var reqId = document.getElementById('tpReqFilter').value;
+      var cat = document.getElementById('tpCatFilter').value;
+      var audit = document.getElementById('tpAuditFilter').value;
+      var status = document.getElementById('tpStatusFilter').value;
+
+      var params = '?page=' + techPlansPage + '&pageSize=20';
+      if (search) params += '&search=' + encodeURIComponent(search);
+      if (reqId) params += '&requirement_id=' + reqId;
+      if (cat) params += '&category=' + cat;
+      if (audit) params += '&audit_status=' + audit;
+      if (status) params += '&status=' + status;
+
+      api('/api/tech-plans' + params).then(function(data) {
+        renderTechPlans(data.list);
+        renderTechPlansPagination(data);
+      }).catch(function(e) {
+        showToast('error', '加载失败', e.message);
+      });
+    }
+
+    function renderTechPlans(list) {
+      var tb = document.getElementById('techPlansTableBody');
+      if (!list || list.length === 0) {
+        tb.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text-muted)">暂无技术方案</td></tr>';
+        return;
+      }
+      var catMap = {frontend: '前端', backend: '后端', test: '测试', ops: '运维'};
+      var auditMap = {pending: {text: '待审核', class: 'pending'}, pass: {text: '通过', class: 'done'}, reject: {text: '驳回', class: 'in_progress'}};
+      var statusMap = {generating: {text: '生成中', class: 'pending'}, review: {text: '待评审', class: 'pending'}, in_progress: {text: '进行中', class: 'in_progress'}, done: {text: '已完成', class: 'done'}};
+      var html = '';
+      for (var i = 0; i < list.length; i++) {
+        var tp = list[i];
+        var am = auditMap[tp.audit_status] || {text: tp.audit_status, class: ''};
+        var sm = statusMap[tp.review_status] || {text: tp.review_status, class: ''};
+        var canReview = tp.audit_status === 'pass' && tp.review_status === 'review';
+        html += '<tr>' +
+          '<td style="width:50px">' + tp.id + '</td>' +
+          '<td style="width:120px"><span style="cursor:pointer;color:var(--accent-blue)" onclick="closeDrawer();setTimeout(function(){showProjectDrawer(' + (tp.project_id || 0) + ')},100)">' + (tp.project_name || '<span style="color:var(--text-muted)">-</span>') + '</span></td>' +
+          '<td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><span style="cursor:pointer;color:var(--accent-blue)" onclick="closeDrawer();setTimeout(function(){showRequirementDrawer(' + tp.requirement_id + ')},100)" title="' + escapeHtml(tp.requirement_title || '') + '">' + escapeHtml(tp.requirement_title || '') + '</span></td>' +
+          '<td style="width:80px"><span class="code-tag" style="font-size:11px;cursor:pointer" onclick="showTechPlanDetail(' + tp.id + ')">' + (catMap[tp.category] || tp.category) + '</span></td>' +
+          '<td style="width:120px">' + (tp.author_emoji || '') + ' ' + (tp.author_name || '') + '</td>' +
+          '<td style="width:70px"><span style="cursor:pointer;color:var(--accent-blue);font-weight:600" onclick="showTechPlanVersions(' + tp.requirement_id + ', \'' + tp.category + '\')">V' + tp.version + '</span></td>' +
+          '<td style="width:100px"><span class="status-badge ' + am.class + '">' + am.text + '</span></td>' +
+          '<td style="width:100px"><span class="status-badge ' + sm.class + '">' + sm.text + '</span></td>' +
+          '<td style="width:180px;font-size:12px;color:var(--text-muted)">' + (tp.updated_at || '') + '</td>' +
+          '<td style="width:220px;white-space:nowrap">' +
+            '<button class="btn-icon" onclick="showEditTechPlan(' + tp.id + ')" title="编辑">✏️</button>' +
+            '<button class="btn-icon" onclick="showAuditTechPlan(' + tp.id + ')" title="审核" style="color:var(--accent-blue)">📝</button>' +
+            '<button class="btn-icon' + (canReview ? '' : ' disabled') + '" onclick="' + (canReview ? 'reviewTechPlan(' + tp.id + ')' : '') + '" title="评审' + (canReview ? '' : '（需审核通过）') + '" style="color:' + (canReview ? 'var(--success)' : 'var(--text-muted)') + '">✅</button>' +
+            '<button class="btn-icon" onclick="deleteTechPlan(' + tp.id + ')" title="删除" style="color:var(--danger)">🗑️</button>' +
+          '</td></tr>';
+      }
+      tb.innerHTML = html;
+    }
+
+    function renderTechPlansPagination(data) {
+      var pg = document.getElementById('techPlansPagination');
+      if (!data || data.totalPages <= 1) { pg.innerHTML = ''; return; }
+      var html = '<button class="btn btn-secondary" onclick="loadTechPlans(' + (techPlansPage - 1) + ')" ' + (techPlansPage <= 1 ? 'disabled' : '') + '>上一页</button>';
+      html += '<span style="padding:0 12px">第 ' + data.page + ' / ' + data.totalPages + ' 页，共 ' + data.total + ' 条</span>';
+      html += '<button class="btn btn-secondary" onclick="loadTechPlans(' + (techPlansPage + 1) + ')" ' + (techPlansPage >= data.totalPages ? 'disabled' : '') + '>下一页</button>';
+      pg.innerHTML = html;
+    }
+
+    // 加载需求下拉
+    function loadReqOptions() {
+      api('/api/requirements').then(function(data) {
+        var reqs = data.list || data || [];
+        var sel = document.getElementById('tpReqFilter');
+        var sel2 = document.getElementById('ctp-req');
+        var html = '<option value="">全部需求</option>';
+        var html2 = '<option value="">选择需求</option>';
+        for (var i = 0; i < reqs.length; i++) {
+          html += '<option value="' + reqs[i].id + '">' + escapeHtml(reqs[i].title) + '</option>';
+          html2 += '<option value="' + reqs[i].id + '">' + escapeHtml(reqs[i].title) + '</option>';
+        }
+        if (sel) sel.innerHTML = html;
+        if (sel2) sel2.innerHTML = html2;
+      }).catch(function(e) { console.error(e); });
+    }
+
+    // 新建技术方案
+    function showCreateTechPlan() {
+      var catOptions = '<option value="frontend">前端</option><option value="backend">后端</option><option value="test">测试</option><option value="ops">运维</option>';
+      var authorOptions = '<option value="">选择作者</option>';
+      for (var i = 0; i < agents.length; i++) {
+        authorOptions += '<option value="' + agents[i].id + '">' + agents[i].emoji + ' ' + agents[i].name + '</option>';
+      }
+      showModal('新建技术方案',
+        '<div id="createTpForm"><div class="form-group"><label class="form-label">需求 <span style="color:red">*</span></label><select id="ctp-req" class="form-select"><option value="">选择需求</option></select></div><div class="form-group"><label class="form-label">类别 <span style="color:red">*</span></label><select id="ctp-cat" class="form-select">' + catOptions + '</select></div><div class="form-group"><label class="form-label">作者 <span style="color:red">*</span></label><select id="ctp-author" class="form-select">' + authorOptions + '</select></div><div class="form-group"><label class="form-label">方案内容</label><textarea id="ctp-content" class="form-textarea" rows="8" placeholder="请详细描述技术方案..."></textarea></div></div>',
+        '<button type="button" class="btn btn-secondary" onclick="closeModal()">取消</button><button type="button" class="btn btn-primary" onclick="submitCreateTechPlan()">创建</button>',
+        '600px'
+      );
+      loadReqOptions();
+    }
+
+    function submitCreateTechPlan() {
+      var reqId = document.getElementById('ctp-req').value;
+      var cat = document.getElementById('ctp-cat').value;
+      var authorId = document.getElementById('ctp-author').value;
+      var content = document.getElementById('ctp-content').value;
+
+      if (!reqId || !cat || !authorId) {
+        showToast('error', '错误', '需求、类别、作者不能为空');
+        return;
+      }
+
+      api('/api/tech-plans', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({requirement_id: parseInt(reqId), category: cat, author_id: authorId, content: content})
+      }).then(function() {
+        closeModal();
+        showToast('success', '创建成功', '技术方案已创建');
+        loadTechPlans();
+      }).catch(function(e) {
+        showToast('error', '创建失败', e.message);
+      });
+    }
+
+    // 编辑技术方案
+    function showEditTechPlan(id) {
+      api('/api/tech-plans/' + id).then(function(tp) {
+        var catOptions = '<option value="frontend"' + (tp.category === 'frontend' ? ' selected' : '') + '>前端</option><option value="backend"' + (tp.category === 'backend' ? ' selected' : '') + '>后端</option><option value="test"' + (tp.category === 'test' ? ' selected' : '') + '>测试</option><option value="ops"' + (tp.category === 'ops' ? ' selected' : '') + '>运维</option>';
+        showModal('编辑技术方案',
+          '<div id="editTpForm"><div class="form-group"><label class="form-label">类别</label><select id="etp-cat" class="form-select">' + catOptions + '</select></div><div class="form-group"><label class="form-label">方案内容 <span style="color:var(--warning)">（修改内容将新增版本，审核状态重置）</span></label><textarea id="etp-content" class="form-textarea" rows="8">' + escapeHtml(tp.content || '') + '</textarea></div></div>',
+          '<button type="button" class="btn btn-secondary" onclick="closeModal()">取消</button><button type="button" class="btn btn-primary" onclick="submitEditTechPlan(' + id + ')">保存</button>',
+          '600px'
+        );
+      }).catch(function(e) {
+        showToast('error', '加载失败', e.message);
+      });
+    }
+
+    function submitEditTechPlan(id) {
+      var cat = document.getElementById('etp-cat').value;
+      var content = document.getElementById('etp-content').value;
+
+      api('/api/tech-plans/' + id, {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({category: cat, content: content})
+      }).then(function() {
+        closeModal();
+        showToast('success', '更新成功', '技术方案已更新');
+        loadTechPlans();
+      }).catch(function(e) {
+        showToast('error', '更新失败', e.message);
+      });
+    }
+
+    // 删除技术方案
+    function deleteTechPlan(id) {
+      if (!confirm('确定要删除该技术方案吗？')) return;
+      api('/api/tech-plans/' + id, { method: 'DELETE' })
+        .then(function() {
+          showToast('success', '删除成功', '技术方案已删除');
+          loadTechPlans();
+        }).catch(function(e) {
+          showToast('error', '删除失败', e.message);
+        });
+    }
+
+    // 审核技术方案
+    function showAuditTechPlan(id) {
+      document.getElementById('drawerTitle').textContent = '审核技术方案';
+      document.getElementById('drawerBody').innerHTML =
+        '<div style="padding:20px">' +
+        '<div style="margin-bottom:16px"><div style="font-size:14px;font-weight:600;margin-bottom:12px">请选择审核结果</div>' +
+        '<div style="display:flex;gap:8px;margin-bottom:12px">' +
+        '<button class="btn btn-primary" onclick="document.getElementById(\'auditResult\').value=\'pass\';document.getElementById(\'auditCommentDiv\').style.display=\'none\';this.style.fontWeight=\'bold\';this.parentElement.querySelectorAll(\'button\')[1].style.fontWeight=\'normal\'">✅ 通过</button>' +
+        '<button class="btn btn-danger" onclick="document.getElementById(\'auditResult\').value=\'reject\';document.getElementById(\'auditCommentDiv\').style.display=\'block\';this.style.fontWeight=\'bold\';this.parentElement.querySelectorAll(\'button\')[0].style.fontWeight=\'normal\'">❌ 驳回</button>' +
+        '</div><input type="hidden" id="auditResult" value="pass"></div>' +
+        '<div id="auditCommentDiv" style="display:none;margin-bottom:16px"><label class="form-label">驳回原因 <span style="color:red">*</span></label><textarea id="auditComment" class="form-textarea" rows="4" placeholder="请填写驳回原因，负责人将收到通知"></textarea></div>' +
+        '<div style="text-align:right;margin-top:16px"><button class="btn btn-secondary" onclick="closeDrawer()">取消</button> <button class="btn btn-primary" onclick="submitAuditTechPlan(' + id + ')">确认审核</button></div>' +
+        '</div>';
+      document.getElementById('drawerOverlay').classList.add('show');
+      document.getElementById('taskDrawer').classList.add('show');
+    }
+
+    function submitAuditTechPlan(id) {
+      var result = document.getElementById('auditResult').value;
+      var comment = document.getElementById('auditComment').value;
+      if (result === 'reject' && !comment.trim()) {
+        showToast('error', '错误', '驳回时必须填写审核意见');
+        return;
+      }
+      api('/api/tech-plans/' + id + '/audit', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({result: result, comment: comment})
+      }).then(function() {
+        closeDrawer();
+        showToast('success', '审核完成', result === 'pass' ? '审核通过，技术方案可进入评审阶段' : '已驳回，等待负责人修改后重新提交');
+        loadTechPlans();
+      }).catch(function(e) {
+        showToast('error', '审核失败', e.message);
+      });
+    }
+
+    // 评审技术方案
+    function reviewTechPlan(id) {
+      api('/api/tech-plans/' + id + '/review', { method: 'POST' })
+        .then(function() {
+          showToast('success', '评审通过', '技术方案已进入进行中阶段');
+          loadTechPlans();
+        }).catch(function(e) {
+          showToast('error', '评审失败', e.message);
+        });
+    }
+
+    // 技术方案版本历史抽屉
+    async function showTechPlanVersions(requirementId, category) {
+      try {
+        var versions = await api('/api/tech-plans/versions/' + requirementId + '/' + category);
+        var catMap = {frontend: '前端', backend: '后端', test: '测试', ops: '运维'};
+        var auditMap = {pending: {text: '待审核', class: 'pending'}, pass: {text: '通过', class: 'done'}, reject: {text: '驳回', class: 'in_progress'}};
+        var statusMap = {review: {text: '待评审', class: 'pending'}, in_progress: {text: '进行中', class: 'in_progress'}, done: {text: '已完成', class: 'done'}, generating: {text: '生成中', class: 'pending'}};
+
+        var html = '<div style="padding:20px;max-height:80vh;overflow-y:auto">' +
+          '<div style="font-size:14px;font-weight:600;margin-bottom:16px">📋 版本历史 - ' + (catMap[category] || category) + '</div>' +
+          '<div style="display:flex;flex-direction:column;gap:12px">';
+
+        for (var i = 0; i < versions.length; i++) {
+          var v = versions[i];
+          var am = auditMap[v.audit_status] || {text: v.audit_status, class: ''};
+          var sm = statusMap[v.review_status] || {text: v.review_status, class: ''};
+          var isLatest = i === 0;
+          var isGenerating = v.review_status === 'generating';
+          var hasContent = v.content && v.content.trim();
+          var mdHtml = hasContent ? marked.parse(v.content) : '';
+          var leftColor = isLatest ? 'var(--accent-blue)' : 'var(--border-color)';
+
+          html += '<div class="version-card">' +
+            '<div class="version-header" onclick="toggleVersion(this)">' +
+              '<div style="display:flex;align-items:center;gap:10px">' +
+                '<span style="font-size:12px;color:var(--text-muted)">' + (v.author_emoji || '') + '</span>' +
+                '<span style="font-weight:600;font-size:14px">V' + v.version + '</span>' +
+                (isLatest ? '<span class="code-tag" style="font-size:11px">最新</span>' : '') +
+              '</div>' +
+              '<div style="display:flex;align-items:center;gap:8px">' +
+                '<span class="status-badge ' + am.class + '">' + am.text + '</span>' +
+                '<span class="status-badge ' + sm.class + '">' + sm.text + '</span>' +
+                '<span style="font-size:11px;color:var(--text-muted);margin-left:4px">' + (v.created_at || '') + '</span>' +
+                '<span class="version-chevron">▶</span>' +
+              '</div>' +
+            '</div>' +
+            '<div class="version-body" style="display:none;padding:0 20px 20px">' +
+              (v.audit_comment ? '<div class="audit-comment">📝 审核意见：' + escapeHtml(v.audit_comment) + '</div>' : '') +
+              (isGenerating ? '<div style="text-align:center;padding:30px 0">' +
+                '<div class="loading-spinner" style="margin:0 auto 12px"></div>' +
+                '<div style="color:var(--text-muted);font-size:13px">Agent 正在生成方案内容，请稍候...</div></div>' :
+               hasContent ? '<div class="md-content" style="max-height:55vh;overflow-y:auto;padding:16px;background:var(--bg-primary);border-radius:6px;border:1px solid var(--border-color)">' + mdHtml + '</div>' :
+               '<div style="text-align:center;padding:30px 0;color:var(--text-muted);font-size:13px">暂无内容</div>') +
+            '</div>' +
+          '</div>';
+        }
+        html += '</div></div>';
+
+        document.getElementById('drawerTitle').textContent = '版本历史';
+        document.getElementById('drawerBody').innerHTML = html;
+        document.getElementById('drawerOverlay').classList.add('show');
+        document.getElementById('taskDrawer').classList.add('show');
+      } catch (e) {
+        showToast('error', '加载失败', e.message);
+      }
+    }
+
+    function toggleVersion(el) {
+      var body = el.nextElementSibling;
+      var chevron = el.querySelector('.version-chevron');
+      var isOpen = body.style.display !== 'none';
+      body.style.display = isOpen ? 'none' : 'block';
+      chevron.textContent = isOpen ? '▶' : '▼';
+    }
+
+    // 技术方案详情（markdown 渲染）
+    async function showTechPlanDetail(id) {
+      try {
+        var tp = await api('/api/tech-plans/' + id);
+        var catMap = {frontend: '前端', backend: '后端', test: '测试', ops: '运维'};
+        var auditMap = {pending: {text: '待审核', class: 'pending'}, pass: {text: '通过', class: 'done'}, reject: {text: '驳回', class: 'in_progress'}};
+        var statusMap = {review: {text: '待评审', class: 'pending'}, in_progress: {text: '进行中', class: 'in_progress'}, done: {text: '已完成', class: 'done'}, generating: {text: '生成中', class: 'pending'}};
+
+        var am = auditMap[tp.audit_status] || {text: tp.audit_status, class: ''};
+        var sm = statusMap[tp.review_status] || {text: tp.review_status, class: ''};
+        var catLabel = catMap[tp.category] || tp.category;
+
+        var rendered = '';
+        if (tp.content && tp.content.trim()) {
+          rendered = '<div style="line-height:1.8">' + marked.parse(tp.content) + '</div>';
+        } else {
+          rendered = '<div style="text-align:center;padding:40px 0">' +
+            '<div class="loading-spinner" style="margin:0 auto 16px"></div>' +
+            '<div style="color:var(--text-muted);font-style:italic">Agent 正在生成方案内容，请稍候...</div>' +
+          '</div>';
+        }
+
+        document.getElementById('drawerTitle').textContent = catLabel + ' 技术方案 V' + tp.version;
+        document.getElementById('drawerBody').innerHTML =
+          '<div style="padding:20px">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px">' +
+              '<div style="font-size:14px">' +
+                '<span style="font-weight:600">' + catLabel + '</span> ' +
+                '<span style="font-size:12px;color:var(--text-muted);margin-left:8px">V' + tp.version + '</span>' +
+              '</div>' +
+              '<div style="display:flex;gap:8px">' +
+                '<span class="status-badge ' + am.class + '">' + am.text + '</span>' +
+                '<span class="status-badge ' + sm.class + '">' + sm.text + '</span>' +
+              '</div>' +
+            '</div>' +
+            '<div style="display:flex;align-items:center;gap:8px;margin-bottom:20px;padding:12px;background:var(--bg-secondary);border-radius:8px;font-size:13px">' +
+              '<span>' + (tp.author_emoji || '') + '</span>' +
+              '<span style="font-weight:600">' + (tp.author_name || '未知') + '</span>' +
+              '<span style="color:var(--text-muted)">' + (tp.author_role || '') + '</span>' +
+              '<span style="color:var(--text-muted);margin-left:4px">' + (tp.created_at ? '创建于 ' + new Date(tp.created_at).toLocaleString('zh-CN') : '') + '</span>' +
+            '</div>' +
+            '<div style="margin-bottom:24px;padding:20px;background:var(--bg-secondary);border-radius:8px;border-left:3px solid var(--accent-blue);max-height:60vh;overflow-y:auto">' +
+              rendered +
+            '</div>' +
+            '<div style="text-align:right">' +
+              (tp.review_status === 'generating' ? '<button class="btn btn-secondary" onclick="closeDrawer()">关闭</button>' :
+               '<button class="btn btn-secondary" onclick="closeDrawer()">关闭</button>') +
+            '</div>' +
+          '</div>';
+        document.getElementById('drawerOverlay').classList.add('show');
+        document.getElementById('taskDrawer').classList.add('show');
+      } catch (e) {
+        showToast('error', '加载失败', e.message);
+      }
+    }
+
+    // Init
+    loadAgents();
+    loadProjectsForReq();
+    loadRequirements();
+  </script>
+</body>
+</html>

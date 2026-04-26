@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Test</title>
+  <style>
+    body { background: #0f172a; color: #f1f5f9; font-family: sans-serif; padding: 20px; }
+    .nav-item { padding: 10px; background: #1e293b; margin: 5px; cursor: pointer; border-radius: 5px; }
+    .nav-item:hover { background: #334155; }
+    .nav-item.active { background: #3b82f6; }
+    .view { display: none; padding: 20px; }
+    .view.active { display: block; }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="nav-item active" data-view="overview">概览</div>
+    <div class="nav-item" data-view="kanban">看板</div>
+    <div class="nav-item" data-view="approval">审批</div>
+  </nav>
+  
+  <div class="view active" id="view-overview">这是概览视图</div>
+  <div class="view" id="view-kanban">这是看板视图</div>
+  <div class="view" id="view-approval">这是审批视图</div>
+
+  <script>
+    document.querySelectorAll('.nav-item').forEach(item => {
+      item.addEventListener('click', () => {
+        document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+        document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+        item.classList.add('active');
+        document.getElementById('view-' + item.dataset.view).classList.add('active');
+      });
+    });
+  </script>
+</body>
+</html>
