@@ -23,8 +23,9 @@ function getOrCreateLocalProject(projectId) {
 router.get('/:projectId', (req, res) => {
   const db = getDB();
   const lp = getOrCreateLocalProject(req.params.projectId);
+  const project = db.prepare('SELECT name, code FROM projects WHERE id = ? AND deleted = 0').get(req.params.projectId);
   const items = db.prepare('SELECT * FROM local_project_items WHERE local_project_id = ? ORDER BY created_at ASC').all(lp.id);
-  res.json({ code: 0, data: { ...lp, items } });
+  res.json({ code: 0, data: { ...lp, project_name: project ? project.name : '', project_code: project ? project.code : '', items } });
 });
 
 // 更新本地项目基础信息

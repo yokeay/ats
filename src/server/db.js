@@ -243,6 +243,24 @@ function initDB() {
     db.exec(`ALTER TABLE requirements ADD COLUMN review_time DATETIME`);
   } catch (e) {}
 
+  // 创建需求分析结果表
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS requirement_analysis (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        requirement_id INTEGER NOT NULL,
+        needs_ui INTEGER DEFAULT 0,
+        needs_frontend INTEGER DEFAULT 0,
+        needs_backend INTEGER DEFAULT 0,
+        needs_test INTEGER DEFAULT 1,
+        needs_ops INTEGER DEFAULT 0,
+        analysis_summary TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (requirement_id) REFERENCES requirements(id)
+      )
+    `);
+  } catch (e) {}
+
   // 创建需求成员表
   try {
     db.exec(`
@@ -298,6 +316,12 @@ function initDB() {
   } catch (e) {}
   try {
     db.exec(`ALTER TABLE tech_plans ADD COLUMN review_status TEXT DEFAULT 'pending'`);
+  } catch (e) {}
+  try {
+    db.exec(`ALTER TABLE tech_plans ADD COLUMN retrieval_log TEXT DEFAULT '[]'`);
+  } catch (e) {}
+  try {
+    db.exec(`ALTER TABLE tech_plans ADD COLUMN dispatch_phase TEXT DEFAULT 'frontend'`);
   } catch (e) {}
 
   // 修复 tasks 表 deleted 字段

@@ -148,6 +148,7 @@
           </select>
           <select id="tpCatFilter" class="form-select" style="width:120px" onchange="loadTechPlans()">
             <option value="">全部分类</option>
+            <option value="ui">UI原型</option>
             <option value="frontend">前端</option>
             <option value="backend">后端</option>
             <option value="test">测试</option>
@@ -161,6 +162,7 @@
           </select>
           <select id="tpStatusFilter" class="form-select" style="width:130px" onchange="loadTechPlans()">
             <option value="">全部状态</option>
+            <option value="generating">生成中</option>
             <option value="review">待评审</option>
             <option value="in_progress">进行中</option>
             <option value="done">已完成</option>
@@ -175,18 +177,19 @@
                 <tr>
                   <th style="width:50px">ID</th>
                   <th style="width:120px">项目</th>
-                  <th style="width:180px">需求</th>
-                  <th style="width:80px">类别</th>
-                  <th style="width:120px">作者</th>
-                  <th style="width:70px">版本</th>
-                  <th style="width:100px">审核状态</th>
-                  <th style="width:100px">评审状态</th>
-                  <th style="width:180px">更新时间</th>
-                  <th style="width:220px">操作</th>
+                  <th style="width:160px">需求</th>
+                  <th style="width:70px">类别</th>
+                  <th style="width:70px">阶段</th>
+                  <th style="width:100px">作者</th>
+                  <th style="width:60px">版本</th>
+                  <th style="width:90px">审核状态</th>
+                  <th style="width:90px">评审状态</th>
+                  <th style="width:140px">更新时间</th>
+                  <th style="width:200px">操作</th>
                 </tr>
               </thead>
               <tbody id="techPlansTableBody">
-                <tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text-muted)">加载中...</td></tr>
+                <tr><td colspan="11" style="text-align:center;padding:40px;color:var(--text-muted)">加载中...</td></tr>
               </tbody>
             </table>
             <div id="techPlansPagination" style="padding:16px;display:flex;justify-content:center;align-items:center;gap:8px"></div>
@@ -603,8 +606,8 @@
 
         var tasksData = await api('/api/tasks?' + params.toString());
         var reqsData = await api('/api/requirements');
-        kanbanTasks = tasksData;
-        kanbanRequirements = reqsData;
+        kanbanTasks = tasksData.list || tasksData;
+        kanbanRequirements = reqsData.list || reqsData;
 
         // 构建负责人筛选下拉（只构建一次）
         var assigneeSelect = document.getElementById('taskFilterAssignee');
@@ -635,24 +638,87 @@
         return;
       }
 
-      var html = '';
+      // Step 1: 按 requirementId 分组
+      var groups = {};
       for (var i = 0; i < kanbanTasks.length; i++) {
-        var task = kanbanTasks[i];
-        var statusText = {todo:'待执行', in_progress:'进行中', done:'已完成'}[task.status] || task.status;
-        var statusClass = task.status;
-        var hasResult = task.has_result ? '📎 ' : '';
-
-        html += '<tr>';
-        html += '<td>#' + task.id + '</td>';
-        html += '<td>' + (task.requirement_title ? '<span style="color:var(--accent-blue);cursor:pointer" onclick="viewRequirement(' + task.requirement_id + ')">' + task.requirement_title + '</span>' : '<span style="color:var(--text-muted)">-</span>') + '</td>';
-        html += '<td><span style="cursor:pointer;color:var(--accent-blue)" onclick="showTaskDrawer(' + task.id + ')">' + hasResult + task.title + '</span></td>';
-        html += '<td><span class="priority-tag ' + task.priority + '">' + task.priority.toUpperCase() + '</span></td>';
-        html += '<td>' + (task.assignee_emoji || '') + ' ' + (task.assignee_name || '<span style="color:var(--text-muted)">未分配</span>') + '</td>';
-        html += '<td><span class="status-badge ' + statusClass + '">' + statusText + '</span></td>';
-        html += '<td><button class="btn btn-sm btn-secondary" onclick="showTaskDrawer(' + task.id + ')">详情</button></td>';
-        html += '</tr>';
+        var t = kanbanTasks[i];
+        var key = t.requirement_id || '__none__';
+        if (!groups[key]) {
+          groups[key] = {
+            requirement_id: t.requirement_id,
+            requirement_title: t.requirement_title || '无关联需求',
+            tasks: []
+          };
+        }
+        groups[key].tasks.push(t);
       }
+
+      // Step 2: 生成树形HTML
+      var html = '';
+      var groupKeys = Object.keys(groups);
+
+      for (var g = 0; g < groupKeys.length; g++) {
+        var group = groups[groupKeys[g]];
+        var groupId = 'req-' + (group.requirement_id || 'none') + '-' + g;
+
+        // 父行：关联需求（默认收起），用 data-req-name 保存原始值供 toggle 使用
+        html += '<tr data-req-name="' + escapeHtml(group.requirement_title) + '" data-req-count="' + group.tasks.length + '" data-req-state="collapsed" style="background:var(--bg-secondary);cursor:pointer" onclick="toggleReqGroup(\'' + groupId + '\', this)">';
+        html += '<td style="width:50px"><span id="' + groupId + '-icon" style="font-size:11px;margin-right:2px">▶</span>#</td>';
+        html += '<td><span style="color:var(--accent-blue);font-weight:600">' + group.requirement_title + '</span>';
+        html += ' <span style="color:var(--text-muted);font-size:12px">（' + group.tasks.length + ' 个任务）</span></td>';
+        html += '<td colspan="5"><span id="' + groupId + '-hint" style="color:var(--text-muted);font-size:12px">点击展开查看</span></td>';
+        html += '</tr>';
+
+        // 子行：每条任务（默认隐藏）
+        for (var k = 0; k < group.tasks.length; k++) {
+          var task = group.tasks[k];
+          html += buildTaskRow(task, groupId);
+        }
+      }
+
       tbody.innerHTML = html;
+    }
+
+    function toggleReqGroup(groupId, headerRow) {
+      var icon = document.getElementById(groupId + '-icon');
+      var hint = document.getElementById(groupId + '-hint');
+      var taskRows = document.querySelectorAll('tr[data-req-group="' + groupId + '"]');
+      var state = headerRow.dataset.reqState;
+
+      if (state === 'collapsed') {
+        // 展开
+        icon.textContent = '▼';
+        hint.style.display = 'none';
+        taskRows.forEach(function(r) { r.style.display = ''; });
+        headerRow.dataset.reqState = 'expanded';
+      } else {
+        // 收起
+        icon.textContent = '▶';
+        hint.style.display = '';
+        taskRows.forEach(function(r) { r.style.display = 'none'; });
+        headerRow.dataset.reqState = 'collapsed';
+      }
+    }
+
+    function buildTaskRow(task, reqGroup) {
+      var statusText = {todo:'待执行', in_progress:'进行中', done:'已完成'}[task.status] || task.status;
+      var statusClass = task.status;
+      var hasResult = task.has_result ? '📎 ' : '';
+      var hiddenStyle = reqGroup ? 'style="display:none" data-req-group="' + reqGroup + '"' : '';
+
+      var html = '<tr ' + hiddenStyle + '>';
+      html += '<td>#' + task.id + '</td>';
+      html += '<td>' + (task.requirement_title ? '<span style="color:var(--accent-blue);cursor:pointer" onclick="viewRequirement(' + task.requirement_id + ')">' + task.requirement_title + '</span>' : '<span style="color:var(--text-muted)">-</span>') + '</td>';
+      html += '<td><span style="cursor:pointer;color:var(--accent-blue)" onclick="showTaskDrawer(' + task.id + ')">' + hasResult + task.title + '</span></td>';
+      html += '<td><span class="priority-tag ' + task.priority + '">' + task.priority.toUpperCase() + '</span></td>';
+      html += '<td>' + (task.assignee_emoji || '') + ' ' + (task.assignee_name || '<span style="color:var(--text-muted)">未分配</span>') + '</td>';
+      html += '<td><span class="status-badge ' + statusClass + '">' + statusText + '</span></td>';
+      html += '<td>';
+      html += '<button class="btn btn-sm btn-secondary" onclick="showTaskDrawer(' + task.id + ')" style="margin-right:4px">详情</button>';
+      html += '<button class="btn btn-sm btn-danger-outline" onclick="deleteTask(' + task.id + ')" style="color:var(--danger);background:transparent;border:1px solid var(--danger);padding:3px 8px;border-radius:4px;font-size:12px;cursor:pointer">删除</button>';
+      html += '</td>';
+      html += '</tr>';
+      return html;
     }
 
     // 新建任务
@@ -766,15 +832,15 @@
     async function showLocalProject(projectId) {
       try {
         var lp = await api('/api/local-projects/' + projectId);
-        document.getElementById('lpDrawerTitle').textContent = '本地项目: ' + (lp.name || '未命名');
+        document.getElementById('lpDrawerTitle').textContent = '本地项目: ' + (lp.project_name || '未命名');
         var statusLabel = { running: '运行中', stopped: '已停止' };
         var statusClass = { running: 'running', stopped: 'stopped' };
         var itemsHtml = '';
         if (lp.items && lp.items.length > 0) {
-          itemsHtml = '<table style="width:100%;border-collapse:collapse;margin-top:12px"><thead><tr style="border-bottom:1px solid var(--border-color)"><th style="text-align:left;padding:8px 4px;color:var(--text-muted);font-weight:normal;font-size:12px">字段</th><th style="text-align:left;padding:8px 4px;color:var(--text-muted);font-weight:normal;font-size:12px">值</th><th style="width:40px"></th></tr></thead><tbody>';
+          itemsHtml = '<table style="width:100%;border-collapse:collapse;margin-top:12px"><thead><tr style="border-bottom:1px solid var(--border-color)"><th style="text-align:left;padding:8px 4px;color:var(--text-muted);font-weight:normal;font-size:12px">字段</th><th style="text-align:left;padding:8px 4px;color:var(--text-muted);font-weight:normal;font-size:12px">值</th></tr></thead><tbody>';
           for (var ki = 0; ki < lp.items.length; ki++) {
             var item = lp.items[ki];
-            itemsHtml += '<tr style="border-bottom:1px solid var(--border-color)"><td style="padding:8px 4px;font-weight:500">' + escapeHtml(item.item_key) + '</td><td style="padding:8px 4px;color:var(--text-muted)">' + escapeHtml(item.item_value) + '</td><td style="padding:8px 4px;text-align:right"><button class="btn-icon btn-icon-danger" onclick="lpDeleteItem(' + projectId + ',' + item.id + ')" title="删除">🗑️</button></td></tr>';
+            itemsHtml += '<tr style="border-bottom:1px solid var(--border-color)"><td style="padding:8px 4px;font-weight:500">' + escapeHtml(item.item_key) + '</td><td style="padding:8px 4px;color:var(--text-muted);word-break:break-all">' + escapeHtml(item.item_value) + '</td></tr>';
           }
           itemsHtml += '</tbody></table>';
         } else {
@@ -782,22 +848,23 @@
         }
         var html = '<div style="display:flex;flex-direction:column;gap:16px">';
         html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">';
-        html += '<div class="form-group" style="margin:0"><label class="form-label">项目名称</label><input class="form-input" id="lpName" value="' + escapeHtml(lp.name || '') + '" placeholder="本地项目名称"></div>';
-        html += '<div class="form-group" style="margin:0"><label class="form-label">运行地址</label><input class="form-input" id="lpAddress" value="' + (lp.port ? window.location.hostname + ':' + lp.port : '-') + '" placeholder="IP:端口" readonly style="background:var(--bg-main)"></div>';
+        html += '<div class="form-group" style="margin:0"><label class="form-label">项目名称</label><div style="padding:8px 12px;background:var(--bg-main);border-radius:8px;border:1px solid var(--border-color);font-size:14px">' + escapeHtml(lp.project_name || '未命名') + '</div></div>';
+        html += '<div class="form-group" style="margin:0"><label class="form-label">运行地址</label><div style="padding:8px 12px;background:var(--bg-main);border-radius:8px;border:1px solid var(--border-color);font-size:14px;color:' + (lp.port ? 'var(--accent-green)' : 'var(--text-muted)') + '">' + (lp.port ? window.location.hostname + ':' + lp.port : '未运行') + '</div></div>';
         html += '</div>';
-        html += '<div class="form-group" style="margin:0"><label class="form-label">启动命令</label><input class="form-input" id="lpCommand" value="' + escapeHtml(lp.start_command || '') + '" placeholder="如: node server.js 或 npm start"></div>';
+        html += '<div class="form-group" style="margin:0"><label class="form-label">启动命令</label><input class="form-input" id="lpCommand" value="' + escapeHtml(lp.start_command || '') + '" placeholder="如: node server.js"></div>';
         html += '<div class="form-group" style="margin:0"><label class="form-label">工作目录</label><input class="form-input" id="lpWorkDir" value="' + escapeHtml(lp.work_dir || '') + '" placeholder="如: /home/myprojects/JavaScript/myapp"></div>';
         html += '<div style="display:flex;align-items:center;gap:12px">';
         html += '<span class="status-badge ' + (statusClass[lp.status] || 'stopped') + '">' + (statusLabel[lp.status] || '已停止') + '</span>';
         if (lp.status === 'running') {
-          html += '<button class="btn btn-danger" onclick="lpStopProject(' + projectId + ')">停止项目</button>';
+          html += '<a href="http://' + window.location.hostname + ':' + lp.port + '" target="_blank" class="btn btn-secondary" style="text-decoration:none">访问项目</a>';
+          html += '<button class="btn btn-danger" onclick="lpStopProject(' + projectId + ')">停止</button>';
         } else {
           html += '<button class="btn btn-primary" onclick="lpStartProject(' + projectId + ')">启动项目</button>';
         }
         html += '<button class="btn btn-secondary" onclick="lpSaveProject(' + projectId + ')">保存配置</button>';
         html += '</div>';
         html += '<div style="border-top:1px solid var(--border-color);padding-top:12px">';
-        html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-weight:500;font-size:13px">配置项</span><button class="btn btn-sm btn-secondary" onclick="lpAddItem(' + projectId + ')">+ 添加</button></div>';
+        html += '<div style="margin-bottom:8px"><span style="font-weight:500;font-size:13px">配置项</span></div>';
         html += itemsHtml;
         html += '</div>';
         html += '</div>';
@@ -809,11 +876,10 @@
     }
 
     async function lpSaveProject(projectId) {
-      var name = document.getElementById('lpName').value;
       var start_command = document.getElementById('lpCommand').value;
       var work_dir = document.getElementById('lpWorkDir').value;
       try {
-        await api('/api/local-projects/' + projectId, { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name, start_command, work_dir }) });
+        await api('/api/local-projects/' + projectId, { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ start_command, work_dir }) });
         showToast('success', '保存成功');
       } catch (e) {
         showToast('error', '保存失败', e.message);
@@ -1569,10 +1635,11 @@
     function renderTechPlans(list) {
       var tb = document.getElementById('techPlansTableBody');
       if (!list || list.length === 0) {
-        tb.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text-muted)">暂无技术方案</td></tr>';
+        tb.innerHTML = '<tr><td colspan="11" style="text-align:center;padding:40px;color:var(--text-muted)">暂无技术方案</td></tr>';
         return;
       }
-      var catMap = {frontend: '前端', backend: '后端', test: '测试', ops: '运维'};
+      var catMap = {ui: 'UI原型', frontend: '前端', backend: '后端', test: '测试', ops: '运维'};
+      var phaseMap = {ui: {text: 'UI', class: 'pending'}, frontend: {text: '前端', class: 'pending'}, backend: {text: '后端', class: 'in_progress'}, test: {text: '测试', class: 'done'}, ops: {text: '运维', class: 'done'}};
       var auditMap = {pending: {text: '待审核', class: 'pending'}, pass: {text: '通过', class: 'done'}, reject: {text: '驳回', class: 'in_progress'}};
       var statusMap = {generating: {text: '生成中', class: 'pending'}, review: {text: '待评审', class: 'pending'}, in_progress: {text: '进行中', class: 'in_progress'}, done: {text: '已完成', class: 'done'}};
       var html = '';
@@ -1580,18 +1647,20 @@
         var tp = list[i];
         var am = auditMap[tp.audit_status] || {text: tp.audit_status, class: ''};
         var sm = statusMap[tp.review_status] || {text: tp.review_status, class: ''};
+        var pm = phaseMap[tp.dispatch_phase] || {text: tp.dispatch_phase, class: ''};
         var canReview = tp.audit_status === 'pass' && tp.review_status === 'review';
         html += '<tr>' +
           '<td style="width:50px">' + tp.id + '</td>' +
           '<td style="width:120px"><span style="cursor:pointer;color:var(--accent-blue)" onclick="closeDrawer();setTimeout(function(){showProjectDrawer(' + (tp.project_id || 0) + ')},100)">' + (tp.project_name || '<span style="color:var(--text-muted)">-</span>') + '</span></td>' +
-          '<td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><span style="cursor:pointer;color:var(--accent-blue)" onclick="closeDrawer();setTimeout(function(){showRequirementDrawer(' + tp.requirement_id + ')},100)" title="' + escapeHtml(tp.requirement_title || '') + '">' + escapeHtml(tp.requirement_title || '') + '</span></td>' +
-          '<td style="width:80px"><span class="code-tag" style="font-size:11px;cursor:pointer" onclick="showTechPlanDetail(' + tp.id + ')">' + (catMap[tp.category] || tp.category) + '</span></td>' +
-          '<td style="width:120px">' + (tp.author_emoji || '') + ' ' + (tp.author_name || '') + '</td>' +
-          '<td style="width:70px"><span style="cursor:pointer;color:var(--accent-blue);font-weight:600" onclick="showTechPlanVersions(' + tp.requirement_id + ', \'' + tp.category + '\')">V' + tp.version + '</span></td>' +
-          '<td style="width:100px"><span class="status-badge ' + am.class + '">' + am.text + '</span></td>' +
-          '<td style="width:100px"><span class="status-badge ' + sm.class + '">' + sm.text + '</span></td>' +
-          '<td style="width:180px;font-size:12px;color:var(--text-muted)">' + (tp.updated_at || '') + '</td>' +
-          '<td style="width:220px;white-space:nowrap">' +
+          '<td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><span style="cursor:pointer;color:var(--accent-blue)" onclick="closeDrawer();setTimeout(function(){showRequirementDrawer(' + tp.requirement_id + ')},100)" title="' + escapeHtml(tp.requirement_title || '') + '">' + escapeHtml(tp.requirement_title || '') + '</span></td>' +
+          '<td style="width:70px"><span class="code-tag" style="font-size:11px;cursor:pointer" onclick="showTechPlanDetail(' + tp.id + ')">' + (catMap[tp.category] || tp.category) + '</span></td>' +
+          '<td style="width:70px"><span class="status-badge ' + pm.class + '" style="font-size:10px">' + pm.text + '</span></td>' +
+          '<td style="width:100px">' + (tp.author_emoji || '') + ' ' + (tp.author_name || '') + '</td>' +
+          '<td style="width:60px"><span style="cursor:pointer;color:var(--accent-blue);font-weight:600" onclick="showTechPlanVersions(' + tp.requirement_id + ', \'' + tp.category + '\')">V' + tp.version + '</span></td>' +
+          '<td style="width:90px"><span class="status-badge ' + am.class + '">' + am.text + '</span></td>' +
+          '<td style="width:90px"><span class="status-badge ' + sm.class + '">' + sm.text + '</span></td>' +
+          '<td style="width:140px;font-size:12px;color:var(--text-muted)">' + (tp.updated_at || '') + '</td>' +
+          '<td style="width:200px;white-space:nowrap">' +
             '<button class="btn-icon" onclick="showEditTechPlan(' + tp.id + ')" title="编辑">✏️</button>' +
             '<button class="btn-icon" onclick="showAuditTechPlan(' + tp.id + ')" title="审核" style="color:var(--accent-blue)">📝</button>' +
             '<button class="btn-icon' + (canReview ? '' : ' disabled') + '" onclick="' + (canReview ? 'reviewTechPlan(' + tp.id + ')' : '') + '" title="评审' + (canReview ? '' : '（需审核通过）') + '" style="color:' + (canReview ? 'var(--success)' : 'var(--text-muted)') + '">✅</button>' +
@@ -1629,7 +1698,7 @@
 
     // 新建技术方案
     function showCreateTechPlan() {
-      var catOptions = '<option value="frontend">前端</option><option value="backend">后端</option><option value="test">测试</option><option value="ops">运维</option>';
+      var catOptions = '<option value="ui">UI原型</option><option value="frontend">前端</option><option value="backend">后端</option><option value="test">测试</option><option value="ops">运维</option>';
       var authorOptions = '<option value="">选择作者</option>';
       for (var i = 0; i < agents.length; i++) {
         authorOptions += '<option value="' + agents[i].id + '">' + agents[i].emoji + ' ' + agents[i].name + '</option>';
@@ -1669,7 +1738,7 @@
     // 编辑技术方案
     function showEditTechPlan(id) {
       api('/api/tech-plans/' + id).then(function(tp) {
-        var catOptions = '<option value="frontend"' + (tp.category === 'frontend' ? ' selected' : '') + '>前端</option><option value="backend"' + (tp.category === 'backend' ? ' selected' : '') + '>后端</option><option value="test"' + (tp.category === 'test' ? ' selected' : '') + '>测试</option><option value="ops"' + (tp.category === 'ops' ? ' selected' : '') + '>运维</option>';
+        var catOptions = '<option value="ui"' + (tp.category === 'ui' ? ' selected' : '') + '>UI原型</option><option value="frontend"' + (tp.category === 'frontend' ? ' selected' : '') + '>前端</option><option value="backend"' + (tp.category === 'backend' ? ' selected' : '') + '>后端</option><option value="test"' + (tp.category === 'test' ? ' selected' : '') + '>测试</option><option value="ops"' + (tp.category === 'ops' ? ' selected' : '') + '>运维</option>';
         showModal('编辑技术方案',
           '<div id="editTpForm"><div class="form-group"><label class="form-label">类别</label><select id="etp-cat" class="form-select">' + catOptions + '</select></div><div class="form-group"><label class="form-label">方案内容 <span style="color:var(--warning)">（修改内容将新增版本，审核状态重置）</span></label><textarea id="etp-content" class="form-textarea" rows="8">' + escapeHtml(tp.content || '') + '</textarea></div></div>',
           '<button type="button" class="btn btn-secondary" onclick="closeModal()">取消</button><button type="button" class="btn btn-primary" onclick="submitEditTechPlan(' + id + ')">保存</button>',
@@ -1761,9 +1830,10 @@
     async function showTechPlanVersions(requirementId, category) {
       try {
         var versions = await api('/api/tech-plans/versions/' + requirementId + '/' + category);
-        var catMap = {frontend: '前端', backend: '后端', test: '测试', ops: '运维'};
+        var catMap = {ui: 'UI原型', frontend: '前端', backend: '后端', test: '测试', ops: '运维'};
         var auditMap = {pending: {text: '待审核', class: 'pending'}, pass: {text: '通过', class: 'done'}, reject: {text: '驳回', class: 'in_progress'}};
         var statusMap = {review: {text: '待评审', class: 'pending'}, in_progress: {text: '进行中', class: 'in_progress'}, done: {text: '已完成', class: 'done'}, generating: {text: '生成中', class: 'pending'}};
+        var phaseMap = {ui: 'UI', frontend: '前端', backend: '后端', test: '测试', ops: '运维'};
 
         var html = '<div style="padding:20px;max-height:80vh;overflow-y:auto">' +
           '<div style="font-size:14px;font-weight:600;margin-bottom:16px">📋 版本历史 - ' + (catMap[category] || category) + '</div>' +
@@ -1779,12 +1849,33 @@
           var mdHtml = hasContent ? marked.parse(v.content) : '';
           var leftColor = isLatest ? 'var(--accent-blue)' : 'var(--border-color)';
 
-          html += '<div class="version-card">' +
-            '<div class="version-header" onclick="toggleVersion(this)">' +
+          // Deep Mode retrieval_log
+          var retrievalHtml = '';
+          try {
+            var retrievalLog = typeof v.retrieval_log === 'string' ? JSON.parse(v.retrieval_log || '[]') : (v.retrieval_log || []);
+            if (retrievalLog.length > 0) {
+              retrievalHtml = '<div class="deep-mode-section" style="background:var(--bg-secondary);padding:12px;border-radius:8px;margin-bottom:16px">' +
+                '<div style="font-weight:600;margin-bottom:10px;font-size:13px">🔍 Deep Mode 检索记录 <span style="font-size:11px;color:var(--text-muted);font-weight:normal">(' + retrievalLog.length + ' 个文件)</span></div>' +
+                '<div style="display:flex;flex-direction:column;gap:8px">';
+              for (var ri = 0; ri < retrievalLog.length; ri++) {
+                var item = retrievalLog[ri];
+                retrievalHtml += '<div style="background:var(--bg-primary);padding:10px;border-radius:6px;border-left:2px solid var(--accent-blue)">' +
+                  '<div style="font-family:monospace;font-size:12px;color:var(--accent-blue);margin-bottom:4px">' + escapeHtml(item.file || '') + '</div>' +
+                  '<div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">检索原因：' + escapeHtml(item.reason || '') + '</div>' +
+                  (item.snippet ? '<pre style="background:#1a1a2e;padding:8px;border-radius:4px;font-size:11px;overflow-x:auto;color:var(--text-primary);white-space:pre-wrap;word-break:break-all;max-height:80px;overflow-y:auto">' + escapeHtml((item.snippet || '').substring(0, 300)) + '</pre>' : '') +
+                '</div>';
+              }
+              retrievalHtml += '</div></div>';
+            }
+          } catch (ex) {}
+
+          html += '<div class="version-card" id="vc-' + i + '">' +
+            '<div class="version-header"' + (isLatest ? ' style="border-left:3px solid var(--accent-blue)"' : '') + ' onclick="toggleVersion(this)">' +
               '<div style="display:flex;align-items:center;gap:10px">' +
                 '<span style="font-size:12px;color:var(--text-muted)">' + (v.author_emoji || '') + '</span>' +
                 '<span style="font-weight:600;font-size:14px">V' + v.version + '</span>' +
                 (isLatest ? '<span class="code-tag" style="font-size:11px">最新</span>' : '') +
+                '<span style="font-size:11px;color:var(--text-muted);padding:2px 6px;background:var(--bg-secondary);border-radius:4px">' + (phaseMap[v.dispatch_phase] || v.dispatch_phase || '') + '</span>' +
               '</div>' +
               '<div style="display:flex;align-items:center;gap:8px">' +
                 '<span class="status-badge ' + am.class + '">' + am.text + '</span>' +
@@ -1793,12 +1884,13 @@
                 '<span class="version-chevron">▶</span>' +
               '</div>' +
             '</div>' +
-            '<div class="version-body" style="display:none;padding:0 20px 20px">' +
+            '<div class="version-body"' + (isLatest ? '' : ' style="display:none"') + ' id="vb-' + i + '">' +
               (v.audit_comment ? '<div class="audit-comment">📝 审核意见：' + escapeHtml(v.audit_comment) + '</div>' : '') +
+              retrievalHtml +
               (isGenerating ? '<div style="text-align:center;padding:30px 0">' +
                 '<div class="loading-spinner" style="margin:0 auto 12px"></div>' +
                 '<div style="color:var(--text-muted);font-size:13px">Agent 正在生成方案内容，请稍候...</div></div>' :
-               hasContent ? '<div class="md-content" style="max-height:55vh;overflow-y:auto;padding:16px;background:var(--bg-primary);border-radius:6px;border:1px solid var(--border-color)">' + mdHtml + '</div>' :
+               hasContent ? '<div class="md-content" style="max-height:40vh;overflow-y:auto;padding:16px;background:var(--bg-primary);border-radius:6px;border:1px solid var(--border-color)">' + mdHtml + '</div>' :
                '<div style="text-align:center;padding:30px 0;color:var(--text-muted);font-size:13px">暂无内容</div>') +
             '</div>' +
           '</div>';
@@ -1809,6 +1901,13 @@
         document.getElementById('drawerBody').innerHTML = html;
         document.getElementById('drawerOverlay').classList.add('show');
         document.getElementById('taskDrawer').classList.add('show');
+
+        // Auto-expand latest version
+        var firstHeader = document.querySelector('.version-header');
+        var firstBody = document.getElementById('vb-0');
+        var firstChevron = firstHeader ? firstHeader.querySelector('.version-chevron') : null;
+        if (firstBody) { firstBody.style.display = 'block'; }
+        if (firstChevron) { firstChevron.textContent = '▼'; }
       } catch (e) {
         showToast('error', '加载失败', e.message);
       }
@@ -1826,13 +1925,36 @@
     async function showTechPlanDetail(id) {
       try {
         var tp = await api('/api/tech-plans/' + id);
-        var catMap = {frontend: '前端', backend: '后端', test: '测试', ops: '运维'};
+        var catMap = {ui: 'UI原型', frontend: '前端', backend: '后端', test: '测试', ops: '运维'};
         var auditMap = {pending: {text: '待审核', class: 'pending'}, pass: {text: '通过', class: 'done'}, reject: {text: '驳回', class: 'in_progress'}};
         var statusMap = {review: {text: '待评审', class: 'pending'}, in_progress: {text: '进行中', class: 'in_progress'}, done: {text: '已完成', class: 'done'}, generating: {text: '生成中', class: 'pending'}};
+        var phaseMap = {ui: 'UI', frontend: '前端', backend: '后端', test: '测试', ops: '运维'};
 
         var am = auditMap[tp.audit_status] || {text: tp.audit_status, class: ''};
         var sm = statusMap[tp.review_status] || {text: tp.review_status, class: ''};
         var catLabel = catMap[tp.category] || tp.category;
+        var phaseLabel = phaseMap[tp.dispatch_phase] || tp.dispatch_phase || '';
+        var isGenerating = tp.review_status === 'generating';
+
+        // Deep Mode retrieval_log display
+        var retrievalHtml = '';
+        try {
+          var retrievalLog = typeof tp.retrieval_log === 'string' ? JSON.parse(tp.retrieval_log || '[]') : (tp.retrieval_log || []);
+          if (retrievalLog.length > 0) {
+            retrievalHtml = '<div style="margin-bottom:20px">' +
+              '<div style="font-weight:600;margin-bottom:12px;font-size:13px">🔍 Deep Mode 检索记录 <span style="font-size:11px;color:var(--text-muted);font-weight:normal">(' + retrievalLog.length + ' 个文件)</span></div>' +
+              '<div style="display:flex;flex-direction:column;gap:10px">';
+            for (var ri = 0; ri < retrievalLog.length; ri++) {
+              var item = retrievalLog[ri];
+              retrievalHtml += '<div style="background:var(--bg-primary);padding:12px;border-radius:6px;border-left:3px solid var(--accent-blue)">' +
+                '<div style="font-family:monospace;font-size:12px;color:var(--accent-blue);margin-bottom:6px;word-break:break-all">' + escapeHtml(item.file || '') + '</div>' +
+                '<div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">检索原因：' + escapeHtml(item.reason || '') + '</div>' +
+                (item.snippet ? '<pre style="background:#1a1a2e;padding:10px;border-radius:4px;font-size:11px;overflow-x:auto;color:#e2e8f0;white-space:pre-wrap;word-break:break-all;max-height:100px;overflow-y:auto">' + escapeHtml(item.snippet || '') + '</pre>' : '') +
+              '</div>';
+            }
+            retrievalHtml += '</div></div>';
+          }
+        } catch (ex) {}
 
         var rendered = '';
         if (tp.content && tp.content.trim()) {
@@ -1844,6 +1966,20 @@
           '</div>';
         }
 
+        // Deep Mode input form for generating state
+        var deepModeForm = '';
+        if (isGenerating) {
+          deepModeForm = '<div id="deepModeForm">' +
+            '<div style="margin-bottom:16px;padding:16px;background:var(--bg-secondary);border-radius:8px;border-left:3px solid var(--warning)">' +
+              '<div style="font-weight:600;margin-bottom:12px;font-size:13px">🔍 Deep Mode 代码检索 <span style="font-size:11px;color:var(--text-muted);font-weight:normal">(必填 - 提交前必须完成代码检索)</span></div>' +
+              '<div class="form-group"><label class="form-label">检索文件路径 <span style="color:var(--danger)">*</span></label><textarea id="dm-files" class="form-textarea" rows="4" placeholder="/src/components/Modal.jsx&#10;/src/styles/modal.css&#10;/src/hooks/useModal.ts"></textarea></div>' +
+              '<div class="form-group"><label class="form-label">检索原因 <span style="color:var(--danger)">*</span></label><textarea id="dm-reasons" class="form-textarea" rows="3" placeholder="弹窗定位冲突排查&#10;flex布局溢出分析&#10;hooks状态管理逻辑"></textarea></div>' +
+              '<div class="form-group"><label class="form-label">关键代码片段 <span style="font-size:11px;color:var(--text-muted)">(可选，选填相关代码)</span></label><textarea id="dm-snippets" class="form-textarea" rows="4" placeholder="/* 相关代码片段，复制自检索到的文件 */&#10;const Modal = ({ open, onClose }) => {...}"></textarea></div>' +
+            '</div>' +
+            '<div class="form-group"><label class="form-label">技术方案内容 <span style="color:var(--danger)">*</span></label><textarea id="dm-content" class="form-textarea" rows="12" placeholder="请在此填写完整的技术方案 markdown 文档。&#10;&#10;在输出方案前，必须先完成上述代码检索步骤，并在下方说明你检索了哪些文件、分析了哪些代码片段、为什么这样修改。"></textarea></div>' +
+          '</div>';
+        }
+
         document.getElementById('drawerTitle').textContent = catLabel + ' 技术方案 V' + tp.version;
         document.getElementById('drawerBody').innerHTML =
           '<div style="padding:20px">' +
@@ -1851,6 +1987,7 @@
               '<div style="font-size:14px">' +
                 '<span style="font-weight:600">' + catLabel + '</span> ' +
                 '<span style="font-size:12px;color:var(--text-muted);margin-left:8px">V' + tp.version + '</span>' +
+                (phaseLabel ? '<span class="status-badge pending" style="font-size:10px;margin-left:8px">' + phaseLabel + '</span>' : '') +
               '</div>' +
               '<div style="display:flex;gap:8px">' +
                 '<span class="status-badge ' + am.class + '">' + am.text + '</span>' +
@@ -1863,12 +2000,12 @@
               '<span style="color:var(--text-muted)">' + (tp.author_role || '') + '</span>' +
               '<span style="color:var(--text-muted);margin-left:4px">' + (tp.created_at ? '创建于 ' + new Date(tp.created_at).toLocaleString('zh-CN') : '') + '</span>' +
             '</div>' +
-            '<div style="margin-bottom:24px;padding:20px;background:var(--bg-secondary);border-radius:8px;border-left:3px solid var(--accent-blue);max-height:60vh;overflow-y:auto">' +
-              rendered +
-            '</div>' +
-            '<div style="text-align:right">' +
-              (tp.review_status === 'generating' ? '<button class="btn btn-secondary" onclick="closeDrawer()">关闭</button>' :
-               '<button class="btn btn-secondary" onclick="closeDrawer()">关闭</button>') +
+            (isGenerating ? '' : retrievalHtml) +
+            (isGenerating ? deepModeForm :
+             '<div style="margin-bottom:24px;padding:20px;background:var(--bg-secondary);border-radius:8px;border-left:3px solid var(--accent-blue);max-height:50vh;overflow-y:auto">' + rendered + '</div>') +
+            '<div style="text-align:right;display:flex;gap:8px;justify-content:flex-end">' +
+              '<button class="btn btn-secondary" onclick="closeDrawer()">关闭</button>' +
+              (isGenerating ? '<button class="btn btn-primary" onclick="submitTechPlanDeepMode(' + tp.id + ')">📤 提交方案</button>' : '') +
             '</div>' +
           '</div>';
         document.getElementById('drawerOverlay').classList.add('show');
@@ -1876,6 +2013,63 @@
       } catch (e) {
         showToast('error', '加载失败', e.message);
       }
+    }
+
+    function submitTechPlanDeepMode(id) {
+      var filesEl = document.getElementById('dm-files');
+      var reasonsEl = document.getElementById('dm-reasons');
+      var snippetsEl = document.getElementById('dm-snippets');
+      var contentEl = document.getElementById('dm-content');
+
+      if (!filesEl || !reasonsEl || !contentEl) return;
+
+      var files = filesEl.value.trim().split('\n').filter(function(f) { return f.trim(); });
+      var reasons = reasonsEl.value.trim().split('\n').filter(function(r) { return r.trim(); });
+      var snippets = snippetsEl ? snippetsEl.value.trim().split('\n---\n').filter(function(s) { return s.trim(); }) : [];
+
+      if (files.length === 0) {
+        showToast('error', '错误', '请至少填写一个检索文件路径');
+        return;
+      }
+      if (reasons.length === 0) {
+        showToast('error', '错误', '请填写检索原因');
+        return;
+      }
+      if (!contentEl.value.trim()) {
+        showToast('error', '错误', '技术方案内容不能为空');
+        return;
+      }
+
+      // Build retrieval_log JSON array
+      var retrievalLog = [];
+      for (var i = 0; i < files.length; i++) {
+        var snippet = '';
+        if (snippets[i]) {
+          snippet = snippets[i].trim();
+        } else if (snippets.length === 1 && snippets[0] && files.length > 1) {
+          snippet = snippets[0].trim();
+        }
+        retrievalLog.push({
+          file: files[i].trim(),
+          reason: reasons[i] ? reasons[i].trim() : (reasons[0] ? reasons[0].trim() : ''),
+          snippet: snippet
+        });
+      }
+
+      api('/api/tech-plans/' + id + '/submit', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          content: contentEl.value.trim(),
+          retrieval_log: JSON.stringify(retrievalLog)
+        })
+      }).then(function() {
+        closeDrawer();
+        showToast('success', '提交成功', '技术方案已提交，等待审核');
+        loadTechPlans();
+      }).catch(function(e) {
+        showToast('error', '提交失败', e.message);
+      });
     }
 
     // Init

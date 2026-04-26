@@ -22,7 +22,7 @@ app.use(express.static(path.join(__dirname, '../public')));
 
 // 路由
 const agentsRouter = require('./routes/agents');
-const requirementsRouter = require('./routes/requirements');
+const { router: requirementsRouter } = require('./routes/requirements');
 const tasksRouter = require('./routes/tasks');
 const approvalsRouter = require('./routes/approvals');
 const systemRouter = require('./routes/system');
@@ -83,7 +83,7 @@ function generateTechPlanContent(category, reqTitle, reqDesc, auditComment) {
   const isRejection = !!auditComment;
 
   // 根据驳回意见分析关键词，生成有针对性的内容
-  const catNames = { frontend: '前端', backend: '后端', test: '测试', ops: '运维' };
+  const catNames = { ui: 'UI原型', frontend: '前端', backend: '后端', test: '测试', ops: '运维' };
   const catLabel = catNames[category] || category;
 
   if (category === 'frontend' && isRejection) {
@@ -298,75 +298,122 @@ ${rejectionSection}
 > 本方案由 Agent 持续集成生成于 ${now}${isRejection ? '（已根据驳回意见修订）' : ''}`;
 }
 
+// 生成 Deep Mode 检索记录（模拟 Agent 检索文件的过程）
+function generateRetrievalLog(category, reqTitle, reqDesc) {
+  const logs = {
+    ui: [
+      { file: '/src/pages/UserCenter/UserCenter.tsx', snippet: 'const UserCenter = () => {...}', reason: '个人中心页面结构分析，用于确定 UI 布局' },
+      { file: '/src/components/Modal/NewPageModal.tsx', snippet: 'export function NewPageModal({ open, onClose }) {...}', reason: '弹窗组件结构分析，用于 UI 交互设计' },
+      { file: '/src/styles/user-center.css', snippet: '.user-center { padding: 24px; }', reason: '现有样式分析，用于保持设计一致性' }
+    ],
+    frontend: [
+      { file: '/src/pages/UserCenter/UserCenter.tsx', snippet: 'const UserCenter = () => {...}', reason: '个人中心页面结构分析，用于确定改动范围' },
+      { file: '/src/components/Modal/NewPageModal.tsx', snippet: 'export function NewPageModal({ open, onClose }) {...}', reason: '弹窗组件实现分析，排查 z-index 层级问题' },
+      { file: '/src/styles/modal.css', snippet: '.modal-overlay { position: fixed; z-index: 1000; }', reason: '弹窗样式分析，排查 overflow hidden 截断问题' },
+      { file: '/src/icons/iconMap.ts', snippet: 'export const iconMap = { edit: faPencil, delete: faTrash }', reason: '图标映射表分析，排查图标名错误' }
+    ],
+    backend: [
+      { file: '/src/api/auth/login.ts', snippet: 'export async function login(req: Request, res: Response) {...}', reason: '登录接口实现分析，确定认证流程' },
+      { file: '/src/models/User.ts', snippet: 'export interface User { id: number; name: string; }', reason: '用户数据模型分析，确定数据库表结构' },
+      { file: '/src/services/auth.ts', snippet: 'export async function authenticate(username, password) {...}', reason: '认证服务层分析，确定权限校验逻辑' }
+    ],
+    test: [
+      { file: '/src/api/auth/login.ts', snippet: 'export async function login(req: Request, res: Response) {...}', reason: '测试目标接口分析，覆盖认证路径' },
+      { file: '/src/__tests__/login.spec.ts', snippet: "describe('Login', () => { it('should login', ...); })", reason: '现有测试用例分析，确定覆盖盲区' },
+      { file: '/tests/e2e/flows.spec.ts', snippet: "page.fill('#username', 'admin');", reason: 'E2E 测试流程分析，覆盖关键用户路径' }
+    ],
+    ops: [
+      { file: '/deploy/docker-compose.yml', snippet: 'services:\n  app:\n    build: .', reason: '容器编排配置分析，确定部署架构' },
+      { file: '/.github/workflows/deploy.yml', snippet: 'name: Deploy\non: [push]', reason: 'CI/CD 流程分析，确定自动化发布链路' },
+      { file: '/nginx.conf', snippet: 'server {\n  listen 80;\n  location / { proxy_pass ... }', reason: 'Nginx 配置分析，确定反向代理配置' }
+    ]
+  };
+
+  return JSON.stringify(logs[category] || logs.frontend);
+}
+
 // 技术方案模拟器
 function startTechPlanSimulator() {
   const { getDB } = require('./server/db');
 
+  // 派发阶段优先级：ui > frontend > backend > test > ops
+  const PHASE_ORDER = { ui: 0, frontend: 1, backend: 2, test: 3, ops: 4 };
+
   setInterval(() => {
     try {
       const db = getDB();
-      // 获取所有正在生成中的技术方案（初始生成 或 驳回后重新生成）
+      // 获取所有正在生成中的技术方案，按派发阶段优先级排序
       const pendingPlans = db.prepare(`
         SELECT tp.*, r.title, r.description, a.name as agent_name
         FROM tech_plans tp
         JOIN requirements r ON tp.requirement_id = r.id
         JOIN agents a ON tp.author_id = a.id
         WHERE tp.review_status = 'generating' AND tp.deleted = 0
-        LIMIT 1
       `).all();
 
-      for (const tp of pendingPlans) {
-        const isRejection = tp.audit_status === 'reject' || !!tp.audit_comment;
-        const actionLabel = isRejection ? '修改方案（驳回重做）' : '编写方案';
-        const detailPrefix = isRejection
-          ? '正在根据驳回意见修改「' + tp.title + '」的' + tp.category + '技术方案...'
-          : '正在为需求「' + tp.title + '」构思' + tp.category + '技术方案...';
+      // 按派发阶段优先级排序，取最高优先级的一个
+      pendingPlans.sort((a, b) => {
+        const pa = PHASE_ORDER[a.dispatch_phase] ?? 99;
+        const pb = PHASE_ORDER[b.dispatch_phase] ?? 99;
+        return pa - pb;
+      });
 
-        // 1. 将 Agent 设为忙碌
-        db.prepare(`UPDATE agents SET status = 'busy' WHERE id = ?`).run(tp.author_id);
-        db.prepare(`
-          UPDATE agent_work_status
-          SET current_action = ?,
-              current_detail = ?,
-              progress = 10,
-              last_update = CURRENT_TIMESTAMP
-          WHERE agent_id = ?
-        `).run(actionLabel, detailPrefix, tp.author_id);
+      const tp = pendingPlans[0];
+      if (!tp) return;
 
-        // 广播进入状态
-        broadcastToAgent(tp.author_id, { type: 'tech_plan_starting', tech_plan_id: tp.id });
+      const isRejection = tp.audit_status === 'reject' || !!tp.audit_comment;
+      const actionLabel = isRejection ? '修改方案（驳回重做）' : '编写方案';
+      const catNames = { ui: 'UI原型', frontend: '前端', backend: '后端', test: '测试', ops: '运维' };
+      const catLabel = catNames[tp.dispatch_phase] || tp.category;
+      const detailPrefix = isRejection
+        ? '正在根据驳回意见修改「' + tp.title + '」的' + catLabel + '技术方案...'
+        : '正在为需求「' + tp.title + '」构思' + catLabel + '技术方案...';
 
-        // 2. 模拟耗时过程（5-10秒后完成）
-        setTimeout(() => {
-          try {
-            const content = generateTechPlanContent(tp.category, tp.title, tp.description, tp.audit_comment);
+      // 1. 将 Agent 设为忙碌
+      db.prepare(`UPDATE agents SET status = 'busy' WHERE id = ?`).run(tp.author_id);
+      db.prepare(`
+        UPDATE agent_work_status
+        SET current_action = ?,
+            current_detail = ?,
+            progress = 10,
+            last_update = CURRENT_TIMESTAMP
+        WHERE agent_id = ?
+      `).run(actionLabel, detailPrefix, tp.author_id);
 
-            // 提交内容：如果是驳回重做，状态重置为 pending 待重新审核
-            const newAuditStatus = isRejection ? 'pending' : tp.audit_status;
-            db.prepare(`
-              UPDATE tech_plans
-              SET content = ?, review_status = 'review', audit_status = ?, updated_at = CURRENT_TIMESTAMP
-              WHERE id = ?
-            `).run(content, newAuditStatus, tp.id);
+      // 广播进入状态
+      broadcastToAgent(tp.author_id, { type: 'tech_plan_starting', tech_plan_id: tp.id });
 
-            // 恢复 Agent 状态
-            db.prepare(`UPDATE agents SET status = 'idle' WHERE id = ?`).run(tp.author_id);
-            db.prepare(`
-              UPDATE agent_work_status
-              SET current_action = '已完成方案',
-                  current_detail = '已提交' + ? + '技术方案' + ?,
-                  progress = 100,
-                  last_update = CURRENT_TIMESTAMP
-              WHERE agent_id = ?
-            `).run(tp.category, isRejection ? '（已根据驳回意见修改）' : '', tp.author_id);
+      // 2. 模拟耗时过程（5-10秒后完成）
+      setTimeout(() => {
+        try {
+          const content = generateTechPlanContent(tp.category, tp.title, tp.description, tp.audit_comment);
+          const retrievalLog = generateRetrievalLog(tp.dispatch_phase, tp.title, tp.description);
 
-            // 广播完成
-            broadcastToAll({ type: 'tech_plan_completed', tech_plan_id: tp.id, agent_id: tp.author_id });
-          } catch (e) {
-            console.error('Tech plan generation inner error:', e);
-          }
-        }, 8000 + Math.random() * 4000); // 8-12秒
-      }
+          // 提交内容：如果是驳回重做，状态重置为 pending 待重新审核
+          const newAuditStatus = isRejection ? 'pending' : tp.audit_status;
+          db.prepare(`
+            UPDATE tech_plans
+            SET content = ?, review_status = 'review', audit_status = ?, retrieval_log = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).run(content, newAuditStatus, retrievalLog, tp.id);
+
+          // 恢复 Agent 状态
+          db.prepare(`UPDATE agents SET status = 'idle' WHERE id = ?`).run(tp.author_id);
+          db.prepare(`
+            UPDATE agent_work_status
+            SET current_action = '已完成方案',
+                current_detail = '已提交' + ? + '技术方案' + ?,
+                progress = 100,
+                last_update = CURRENT_TIMESTAMP
+            WHERE agent_id = ?
+          `).run(catLabel, isRejection ? '（已根据驳回意见修改）' : '', tp.author_id);
+
+          // 广播完成
+          broadcastToAll({ type: 'tech_plan_completed', tech_plan_id: tp.id, agent_id: tp.author_id });
+        } catch (e) {
+          console.error('Tech plan generation inner error:', e);
+        }
+      }, 8000 + Math.random() * 4000); // 8-12秒
     } catch (e) {
       // 忽略模拟器错误
     }
@@ -377,25 +424,16 @@ function startTechPlanSimulator() {
 function generateSimulatedResult(agent, task) {
   const timestamp = new Date().toLocaleString('zh-CN');
   const results = {
-    'ui-001': `<!DOCTYPE html>
-<html>
-<head>
-  <style>
-    body { font-family: system-ui; padding: 20px; }
-    .login-form { max-width: 400px; margin: 50px auto; }
-    input { width: 100%; padding: 12px; margin: 8px 0; border: 1px solid #ddd; border-radius: 8px; }
-    button { width: 100%; padding: 12px; background: #6366f1; color: white; border: none; border-radius: 8px; cursor: pointer; }
-  </style>
-</head>
-<body>
-  <div class="login-form">
-    <h2>用户登录</h2>
-    <input type="text" placeholder="用户名">
-    <input type="password" placeholder="密码">
-    <button>登录</button>
-  </div>
-</body>
-</html>`,
+    'ui-001': `// UI 设计交付物:
+// 设计稿: /designs/login-highfi.png
+// 交互说明: /designs/login-prototype.fig
+// 标注文件: /designs/login-spec.md
+
+// 设计内容:
+// - 登录页面：居中卡片布局，白色背景，阴影效果
+// - 输入框：80px 高度，圆角 8px，聚焦状态蓝色边框
+// - 按钮：主按钮使用 #6366F1 品牌色，hover 效果为颜色加深
+// - 响应式：768px 以下输入框宽度 90vw`,
     'fe-001': `// 文件列表:
 // src/pages/login.tsx
 // src/components/LoginForm.tsx
@@ -512,6 +550,11 @@ function startTaskCreationSimulator() {
           try {
             // 根据方案类别生成任务模板
             const catTasks = {
+              ui: [
+                { title: '原型设计', detail: '设计 UI 原型图与交互说明', priority: 'p1', hours: 6 },
+                { title: '设计交付物', detail: '输出高保真设计稿与标注', priority: 'p2', hours: 4 },
+                { title: '设计走查', detail: '开发完成后进行 UI 一致性走查', priority: 'p3', hours: 2 }
+              ],
               frontend: [
                 { title: '界面开发', detail: '根据技术方案完成前端界面开发', priority: 'p1', hours: 8 },
                 { title: '组件封装', detail: '封装可复用组件', priority: 'p2', hours: 4 },

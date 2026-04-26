@@ -244,7 +244,19 @@ router.get('/meta/projects', (req, res) => {
   res.json({ code: 0, data: projects });
 });
 
-// 评审需求（通过评审 → 进行中，自动为每个角色成员生成技术方案）
+// 获取需求分析结果
+router.get('/:id/analysis', (req, res) => {
+  const db = getDB();
+  const analysis = db.prepare('SELECT * FROM requirement_analysis WHERE requirement_id = ?').get(req.params.id);
+  if (!analysis) {
+    return res.json({ code: 0, data: null });
+  }
+  res.json({ code: 0, data: analysis });
+});
+
+// 评审需求（通过评审 → 进行中）
+// 核心原则：评审只做状态变更 + 需求分析 + 派发第一阶段
+// 禁止直接同步生成技术方案内容（由模拟器异步执行 Deep Mode 后生成）
 router.post('/:id/review', (req, res) => {
   const db = getDB();
   const requirement = db.prepare('SELECT * FROM requirements WHERE id = ? AND deleted = 0').get(req.params.id);
@@ -252,85 +264,111 @@ router.post('/:id/review', (req, res) => {
     return res.status(404).json({ code: 404, message: '需求不存在' });
   }
 
-  // 角色 → 技术方案类别 映射
-  const roleMap = {
-    'Frontend Engineer': 'frontend',
-    'Backend Engineer': 'backend',
-    'Test Engineer': 'test',
-    'DevOps Engineer': 'ops'
-  };
+  // ===== Step 1: 分析需求内容，判断哪些阶段需要 =====
+  const content = (requirement.title || '').toLowerCase() + ' ' + (requirement.description || '').toLowerCase();
 
-  const catNames = { frontend: '前端', backend: '后端', test: '测试', ops: '运维' };
+  const needsUI = /界面|弹窗|页面|布局|组件|modal|dialog|图标|icon/.test(content);
+  const needsFrontend = /界面|弹窗|页面|布局|样式|ui|前端|页面|组件|modal|dialog|icon|图标|列表|表单|输入|按钮/.test(content);
+  const needsBackend = /接口|api|后端|数据库|服务器|接口|增删改查|crud|存储|认证|权限|token/.test(content);
+  const needsOps = /部署|上线|发布|docker|k8s|ci\/cd|ci|运维|nginx|反向代理/.test(content);
+  const needsTest = true; // 测试永远需要
 
-  // 获取需求成员
-  const members = db.prepare(`
-    SELECT rm.*, ag.role as agent_role, ag.name as agent_name, ag.emoji as agent_emoji
-    FROM requirement_members rm
-    LEFT JOIN agents ag ON rm.agent_id = ag.id
-    WHERE rm.requirement_id = ?
-  `).all(req.params.id);
+  const relevantCats = [];
+  if (needsUI) relevantCats.push('ui');
+  if (needsFrontend) relevantCats.push('frontend');
+  if (needsBackend) relevantCats.push('backend');
+  if (needsTest) relevantCats.push('test');
+  if (needsOps) relevantCats.push('ops');
 
-  // 收集需要创建方案的类别（按 category 去重，每个类别保留第一个 Agent）
-  const categoryAgents = {}; // category → { agent_id, agent_name, agent_emoji }
-  for (const m of members) {
-    const cat = roleMap[m.agent_role];
-    if (cat && !categoryAgents[cat]) {
-      categoryAgents[cat] = { agent_id: m.agent_id, agent_name: m.agent_name, agent_emoji: m.agent_emoji };
-    }
+  if (relevantCats.length === 0) {
+    relevantCats.push('frontend'); // 默认前端
   }
 
-  // 为每个类别创建技术方案（如不存在），内容为空等待 Agent 提交
-  const insertTp = db.prepare(`
-    INSERT INTO tech_plans (requirement_id, category, author_id, content, version, audit_status, review_status)
-    VALUES (?, ?, ?, '', 1, 'pending', 'generating')
-  `);
+  // ===== Step 2: 保存需求分析结果（仅记录，不生成方案） =====
+  db.prepare(`
+    INSERT OR REPLACE INTO requirement_analysis (requirement_id, needs_ui, needs_frontend, needs_backend, needs_test, needs_ops, analysis_summary, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+  `).run(
+    req.params.id,
+    needsUI ? 1 : 0,
+    needsFrontend ? 1 : 0,
+    needsBackend ? 1 : 0,
+    needsTest ? 1 : 0,
+    needsOps ? 1 : 0,
+    '涉及阶段：' + relevantCats.map(c => catNames[c] || c).join(' → ')
+  );
 
-  const insertNotif = db.prepare(`
-    INSERT INTO notifications (agent_id, type, title, content) VALUES (?, ?, ?, ?)
-  `);
+  // ===== Step 3: 只派发第一个阶段（generating 状态，模拟器接手） =====
+  const firstCat = relevantCats[0];
+  const catAgents = {
+    ui: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'UI Designer'").get(),
+    frontend: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'Frontend Engineer'").get(),
+    backend: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'Backend Engineer'").get(),
+    test: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'Test Engineer'").get(),
+    ops: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'DevOps Engineer'").get()
+  };
 
-  let actuallyCreated = 0;
-  const createdCats = [];
-
-  for (const [cat, info] of Object.entries(categoryAgents)) {
-    // 检查是否已有该类别的方案
+  const firstAgent = catAgents[firstCat];
+  if (firstAgent) {
+    // 检查是否已有该类别方案
     const existing = db.prepare(`
       SELECT id FROM tech_plans WHERE requirement_id = ? AND category = ? AND deleted = 0
       ORDER BY version DESC LIMIT 1
-    `).get(req.params.id, cat);
+    `).get(req.params.id, firstCat);
 
     if (!existing) {
-      // 创建空方案占位，状态 generating，等待 Agent 提交内容
-      insertTp.run(req.params.id, cat, info.agent_id);
-      actuallyCreated++;
-      createdCats.push(catNames[cat] || cat);
+      // 创建方案记录：状态为 generating（等待模拟器执行 Deep Mode 后生成内容）
+      db.prepare(`
+        INSERT INTO tech_plans (requirement_id, category, author_id, content, version, audit_status, review_status, dispatch_phase)
+        VALUES (?, ?, ?, '', 1, 'pending', 'generating', ?)
+      `).run(req.params.id, firstCat, firstAgent.id, firstCat);
 
-      // 通知对应的 Agent 去生成技术方案
-      const catLabel = catNames[cat] || cat;
-      insertNotif.run(
-        info.agent_id,
-        'tech_plan_task',
-        '📋 技术方案任务 - ' + catLabel,
-        '需求「' + requirement.title + '」已通过评审，请完成「' + catLabel + '」技术方案文档并提交。需求ID：' + req.params.id
-      );
+      // 通知 Agent 进入 Deep Mode
+      const catLabel = catNames[firstCat] || firstCat;
+      db.prepare(`
+        INSERT INTO notifications (agent_id, type, title, content)
+        VALUES (?, 'tech_plan_task', '📋 技术方案任务 - ' + ?, '需求「' + ? + '」已通过评审，请完成「' + ? + '」技术方案。需求ID：' + ? + '。提示：请使用 Deep Mode，先检索相关代码再输出方案。')
+      `).run(firstAgent.id, catLabel, requirement.title, catLabel, req.params.id);
+
+      // 广播任务派发
+      const { broadcastToAgent } = require('../server/sse');
+      broadcastToAgent(firstAgent.id, {
+        type: 'tech_plan_dispatched',
+        requirement_id: req.params.id,
+        category: firstCat,
+        phase: firstCat,
+        title: requirement.title,
+        message: catLabel + ' 技术方案任务已派发，请进入 Deep Mode 开始工作'
+      });
     }
   }
 
-  // 更新需求状态
+  // ===== Step 4: 更新需求状态 =====
   db.prepare(`
     UPDATE requirements SET status = 'in_progress', review_time = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `).run(req.params.id);
 
-  const catsStr = createdCats.join('、');
-  const msg = actuallyCreated > 0
-    ? '需求评审通过，已通知相关 Agent 生成技术方案：' + catsStr
-    : '需求评审通过，所有技术方案已存在，无需重复创建';
+  const catsStr = relevantCats.map(c => catNames[c] || c).join(' → ');
   res.json({
     code: 0,
-    message: msg,
-    data: { categories: Object.keys(categoryAgents), techPlanCount: actuallyCreated }
+    message: '需求评审通过，已完成需求分析：' + catsStr + '。当前仅派发首个阶段「' + (catNames[firstCat] || firstCat) + '」，其余阶段将在前置阶段审核通过后依次派发。',
+    data: {
+      categories: relevantCats,
+      analysis: {
+        needs_ui: needsUI,
+        needs_frontend: needsFrontend,
+        needs_backend: needsBackend,
+        needs_test: needsTest,
+        needs_ops: needsOps
+      },
+      current_phase: firstCat,
+      dispatch_chain: relevantCats
+    }
   });
 });
 
-module.exports = router;
+// 模块级常量，供其他模块复用
+const catNames = { ui: 'UI原型', frontend: '前端', backend: '后端', test: '测试', ops: '运维' };
+
+module.exports = { router, catNames };

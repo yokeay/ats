@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { getDB } = require('../server/db');
 const { broadcastToAgent } = require('../server/sse');
+const { catNames } = require('./requirements');
 
 // 获取所有技术方案（只展示最新版本，支持搜索、排序、分页）
 router.get('/', (req, res) => {
@@ -45,7 +46,7 @@ router.get('/', (req, res) => {
   const order = sort === 'asc' ? 'ASC' : 'DESC';
 
   const techPlans = db.prepare(`
-    SELECT tp.id, tp.requirement_id, tp.category, tp.author_id, tp.version, tp.content, tp.review_status, tp.audit_status, tp.auditor_id, tp.audited_at, tp.audit_comment, tp.reviewed_at, tp.review_comment, tp.created_at, tp.updated_at,
+    SELECT tp.id, tp.requirement_id, tp.category, tp.author_id, tp.version, tp.content, tp.review_status, tp.audit_status, tp.auditor_id, tp.audited_at, tp.audit_comment, tp.reviewed_at, tp.review_comment, tp.created_at, tp.updated_at, tp.retrieval_log, tp.dispatch_phase,
     p.id as project_id, p.name as project_name, p.code as project_code,
     r.title as requirement_title,
     a.name as author_name, a.emoji as author_emoji, a.role as author_role,
@@ -74,7 +75,7 @@ router.get('/', (req, res) => {
 router.get('/:id', (req, res) => {
   const db = getDB();
   const techPlan = db.prepare(`
-    SELECT tp.*,
+    SELECT tp.*, tp.retrieval_log, tp.dispatch_phase,
     p.id as project_id, p.name as project_name, p.code as project_code,
     r.title as requirement_title,
     a.name as author_name, a.emoji as author_emoji, a.role as author_role,
@@ -100,14 +101,14 @@ router.get('/versions/:requirement_id/:category', (req, res) => {
   const { requirement_id, category } = req.params;
 
   const versions = db.prepare(`
-    SELECT tp.*,
+    SELECT tp.*, tp.retrieval_log, tp.dispatch_phase,
     a.name as author_name, a.emoji as author_emoji, a.role as author_role,
     au.name as auditor_name, au.emoji as auditor_emoji
     FROM tech_plans tp
     LEFT JOIN agents a ON tp.author_id = a.id
     LEFT JOIN agents au ON tp.auditor_id = au.id
     WHERE tp.requirement_id = ? AND tp.category = ? AND tp.deleted = 0
-    ORDER BY tp.version DESC
+    ORDER BY tp.created_at DESC
   `).all(requirement_id, category);
 
   res.json({ code: 0, data: versions });
@@ -116,13 +117,13 @@ router.get('/versions/:requirement_id/:category', (req, res) => {
 // 创建技术方案
 router.post('/', (req, res) => {
   const db = getDB();
-  const { requirement_id, category, author_id, content } = req.body;
+  const { requirement_id, category, author_id, content, dispatch_phase } = req.body;
 
   if (!requirement_id || !category || !author_id) {
     return res.status(400).json({ code: 400, message: '需求、类别、作者不能为空' });
   }
 
-  const categories = ['frontend', 'backend', 'test', 'ops'];
+  const categories = ['ui', 'frontend', 'backend', 'test', 'ops'];
   if (!categories.includes(category)) {
     return res.status(400).json({ code: 400, message: '无效的技术方案类别' });
   }
@@ -134,9 +135,9 @@ router.post('/', (req, res) => {
   }
 
   const result = db.prepare(`
-    INSERT INTO tech_plans (requirement_id, category, author_id, content, version, audit_status, review_status)
-    VALUES (?, ?, ?, ?, ?, 'pending', 'review')
-  `).run(requirement_id, category, author_id, content || '', existing.count + 1);
+    INSERT INTO tech_plans (requirement_id, category, author_id, content, version, audit_status, review_status, dispatch_phase)
+    VALUES (?, ?, ?, ?, ?, 'pending', 'review', ?)
+  `).run(requirement_id, category, author_id, content || '', existing.count + 1, dispatch_phase || category);
 
   res.json({ code: 0, data: { id: result.lastInsertRowid }, message: '技术方案创建成功' });
 });
@@ -166,7 +167,7 @@ router.patch('/:id', (req, res) => {
       if (maxVersion >= 4) {
         return res.status(400).json({ code: 400, message: '该需求同一类别最多4个版本' });
       }
-      db.prepare(`INSERT INTO tech_plans (requirement_id, category, author_id, content, version, audit_status, review_status) VALUES (?, ?, ?, ?, ?, 'pending', 'review')`).run(techPlan.requirement_id, techPlan.category, author_id || techPlan.author_id, content, newVersion + 1);
+      db.prepare(`INSERT INTO tech_plans (requirement_id, category, author_id, content, version, audit_status, review_status, dispatch_phase) VALUES (?, ?, ?, ?, ?, 'pending', 'review', ?)`).run(techPlan.requirement_id, techPlan.category, author_id || techPlan.author_id, content, newVersion + 1, techPlan.dispatch_phase);
     }
   }
 
@@ -196,36 +197,59 @@ router.post('/:id/audit', (req, res) => {
     return res.status(400).json({ code: 400, message: '驳回时必须填写审核意见' });
   }
 
-  const catNames = { frontend: '前端', backend: '后端', test: '测试', ops: '运维' };
   const catLabel = catNames[techPlan.category] || techPlan.category;
+  const planTitle = techPlan.requirement_title || '未知方案';
+
+  // 查找各类别 Agent（用于派发下一阶段）
+  const catAgents = {
+    ui: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'UI Designer'").get(),
+    frontend: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'Frontend Engineer'").get(),
+    backend: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'Backend Engineer'").get(),
+    test: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'Test Engineer'").get(),
+    ops: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'DevOps Engineer'").get()
+  };
 
   if (result === 'pass') {
     db.prepare(`UPDATE tech_plans SET audit_status = 'pass', auditor_id = 'leader-001', audited_at = CURRENT_TIMESTAMP, audit_comment = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(comment || '', req.params.id);
 
-    // 通知负责人：方案通过，请开始规划任务
-    const catNames = { frontend: '前端', backend: '后端', test: '测试', ops: '运维' };
-    const catLabel = catNames[techPlan.category] || techPlan.category;
-    const planTitle = techPlan.requirement_title || '未知方案';
+    // 闭环：审核通过 → 自动创建执行任务
+    const taskTitle = '【' + catLabel + '】技术方案执行 - ' + planTitle;
+    const taskResult = db.prepare(`
+      INSERT INTO tasks (requirement_id, title, description, assignee_id, status, priority)
+      VALUES (?, ?, ?, ?, 'todo', 'p1')
+    `).run(
+      techPlan.requirement_id,
+      taskTitle,
+      '技术方案ID：' + techPlan.id + '\n类别：' + catLabel + '\n\n请严格按照技术方案执行开发，完成后更新任务状态为已完成。',
+      techPlan.author_id
+    );
+
+    // 通知负责人：方案通过，已自动创建执行任务
     db.prepare(`
       INSERT INTO notifications (agent_id, type, title, content, tech_plan_id, requirement_id, category)
       VALUES (?, 'tech_plan_approved', '✅ 技术方案通过 - ' + ?, ?, ?, ?, ?)
     `).run(
       techPlan.author_id,
       planTitle,
-      catLabel + '技术方案已审核通过，请根据方案开始规划任务、排期，并创建任务同步到任务管理系统。',
+      catLabel + '技术方案已审核通过，已自动创建任务【' + taskTitle + '】，请前往任务管理查看并执行。',
       parseInt(req.params.id),
       techPlan.requirement_id,
       techPlan.category
     );
 
-    // 广播通知给 Agent，触发其创建任务
+    // 广播通知给 Agent，含任务ID
     broadcastToAgent(techPlan.author_id, {
       type: 'tech_plan_approved',
       tech_plan_id: parseInt(req.params.id),
       requirement_id: techPlan.requirement_id,
       category: techPlan.category,
-      title: planTitle
+      title: planTitle,
+      task_id: taskResult.lastInsertRowid,
+      task_title: taskTitle
     });
+
+    // 派发下一阶段（根据 dispatch_phase 链）
+    dispatchNextPhase(db, techPlan, catAgents);
   } else {
     // 驳回：将状态设为 generating，通知 Agent 重新生成
     db.prepare(`UPDATE tech_plans SET audit_status = 'reject', auditor_id = 'leader-001', audited_at = CURRENT_TIMESTAMP, audit_comment = ?, review_status = 'generating', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(comment, req.params.id);
@@ -281,7 +305,8 @@ router.get('/meta/requirements', (req, res) => {
   res.json({ code: 0, data: requirements });
 });
 
-// 强制重新生成技术方案（驳回后手动触发，直接同步生成）
+// 强制重新生成技术方案（驳回后手动触发）
+// 核心原则：不能直接同步生成，必须重置为 generating 让模拟器执行 Deep Mode 后生成
 router.post('/:id/regenerate', (req, res) => {
   const db = getDB();
   const techPlan = db.prepare(`
@@ -299,140 +324,84 @@ router.post('/:id/regenerate', (req, res) => {
     return res.status(400).json({ code: 400, message: '该方案无驳回意见，无需重新生成' });
   }
 
-  // 直接同步生成（复用 server.js 中的模板逻辑）
-  const content = generateTechPlanContent(techPlan.category, techPlan.req_title, techPlan.req_desc, techPlan.audit_comment);
-
+  // 重置状态为 generating：模拟器会检测到并执行 Deep Mode 生成内容
   db.prepare(`
     UPDATE tech_plans
-    SET content = ?, review_status = 'review', audit_status = 'pending', auditor_id = NULL, audited_at = NULL, updated_at = CURRENT_TIMESTAMP
+    SET content = '', review_status = 'generating', audit_status = 'pending', auditor_id = NULL, audited_at = NULL, audit_comment = audit_comment, updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
-  `).run(content, req.params.id);
+  `).run(req.params.id);
 
-  res.json({ code: 0, message: '技术方案已重新生成，请查看详情' });
+  // 通知 Agent 重新生成
+  const catLabel = catNames[techPlan.category] || techPlan.category;
+  db.prepare(`
+    INSERT INTO notifications (agent_id, type, title, content)
+    VALUES (?, 'tech_plan_task', '🔄 技术方案重新生成 - ' + ?, '需求方案被驳回，请根据审核意见重新生成「' + ? + '」技术方案。审核意见：' + ? + '。需求ID：' + ?)
+  `).run(techPlan.author_id, catLabel, catLabel, techPlan.audit_comment, techPlan.requirement_id);
+
+  const { broadcastToAgent } = require('../server/sse');
+  broadcastToAgent(techPlan.author_id, {
+    type: 'tech_plan_regenerate',
+    tech_plan_id: parseInt(req.params.id),
+    requirement_id: techPlan.requirement_id,
+    category: techPlan.category,
+    audit_comment: techPlan.audit_comment,
+    message: catLabel + ' 技术方案需根据驳回意见重新生成，请进入 Deep Mode'
+  });
+
+  res.json({ code: 0, message: '技术方案已重新派发，Agent 将进入 Deep Mode 重新生成' });
 });
 
-// 引入 server.js 中的模板生成函数（hack: 直接在路由里复制核心逻辑）
-function generateTechPlanContent(category, reqTitle, reqDesc, auditComment) {
-  const now = new Date().toLocaleString('zh-CN');
-  const isRejection = !!auditComment;
+// 派发阶段顺序定义
+const DISPATCH_CHAIN = ['ui', 'frontend', 'backend', 'test', 'ops'];
 
-  if (category === 'frontend' && isRejection) {
-    const comment = auditComment.toLowerCase();
-    const isPersonalCenter = reqTitle.includes('个人中心');
-    const hasIconIssue = comment.includes('图标') || comment.includes('混乱') || comment.includes('乱码');
-    const hasModalIssue = comment.includes('弹窗') || comment.includes('modal') || comment.includes('dialog') || (comment.includes('乱') && (comment.includes('新建') || comment.includes('页面')));
-
-    const rootCause = [];
-    if (hasIconIssue) rootCause.push('- **图标渲染错乱**：根因是图标字体未正确加载或图标类名拼写错误；修复方案：检查 src/icons/ 路径、确认 iconfont.css 引入顺序、验证图标渲染 DOM 结构');
-    if (hasModalIssue) rootCause.push('- **弹窗布局错乱**：根因是 Modal 内部 flex 布局 overflow hidden 截断了图标容器；修复方案：隔离 Modal body 样式、增加 min-width、修正 overflow 设置');
-    if (isPersonalCenter) rootCause.push('- **页面列表图标异常**：根因是列表数据 icon 字段与图标库映射表不匹配；修复方案：建立 iconMap 映射对象，增加兜底默认图标');
-
-    return `# 前端技术方案：${reqTitle}
-
-## 0. 驳回意见分析与整改
-> 审核意见：${auditComment}
-
-根据上述驳回意见，本次修订重点：
-1. **先查代码**：到 src/pages/UserCenter/ 和 src/components/Modal/ 目录查看实际代码，找到图标混乱的根因
-2. **问题优先**：不套模板，先写出"现状→问题→根因→方案"的推导过程
-3. **修复导向**：每个分析点都对应具体的代码改动，而非泛泛的架构建议
-
-## 1. 问题分析
-
-### 1.1 现状调研
-${isPersonalCenter ? '- 个人中心页面管理位于 `src/pages/UserCenter/components/PageManage/`\n- 新建页面弹窗组件为 `NewPageModal.tsx`\n- 图标使用 FontAwesome，引入方式为 `@fortawesome/fontawesome-svg-core`' : '- 需现场查看代码确认实际文件结构'}
-
-### 1.2 问题清单
-\`\`\`
-${reqDesc || reqTitle} → 现有问题需结合实际代码确认
-\`\`\`
-
-### 1.3 根因分析
-${rootCause.length > 0 ? rootCause.join('\n') : '- 需实际查看代码后才能确认根因'}
-
-### 1.4 整改计划
-| 问题 | 修复文件 | 修改内容 |
-|------|---------|---------|
-| 图标混乱 | src/styles/iconfont.css | 调整 @import 顺序，确保字体文件先加载 |
-| 弹窗错乱 | NewPageModal.tsx | 修复 flex 布局溢出问题，增加 min-width |
-| 图标名错误 | iconMap.ts | 修正图标名映射表，增加未定义图标的兜底处理 |
-
-## 2. 核心修复代码
-
-### 2.1 修复图标显示（NewPageModal.tsx）
-\`\`\`tsx
-// 错误示例：图标名拼写错误或未导入
-// <i className="fa-pencil-alt" /> ❌
-
-// 正确写法：确保图标已通过组件库导入
-import { faPencil } from '@fortawesome/free-solid-svg-icons';
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-
-// 使用
-<FontAwesomeIcon icon={faPencil} />
-
-// 兜底处理
-const getIcon = (name: string) => {
-  const iconMap = { edit: faPencil, delete: faTrash, add: faPlus };
-  return iconMap[name] || faCircle;
-};
-<FontAwesomeIcon icon={getIcon(item.icon)} />
-\`\`\`
-
-### 2.2 修复 Modal 弹窗布局（PageManageModal.css）
-\`\`\`css
-/* 错误：overflow:hidden 截断了图标 */
-.page-modal-body { overflow: hidden; }
-
-/* 修复：使用 overflow:visible + 容器高度限制 */
-.page-modal-body {
-  overflow-y: auto;
-  max-height: 60vh;       /* 限制高度，超出滚动 */
-  overflow-x: hidden;     /* 仅横向截断 */
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  padding: 16px;
-}
-\`\`\`
-
-## 3. 自检清单
-- [ ] 个人中心页面管理弹窗图标显示正常
-- [ ] 窄屏幕下弹窗不发生布局错乱
-- [ ] 图标名映射表兜底处理生效（未定义图标显示默认图标）
-- [ ] 单元测试覆盖图标渲染逻辑
-- [ ] 在 Chrome / Safari / Firefox 三浏览器验证
-
-## 4. 交付物
-- NewPageModal.tsx（修复后）
-- PageManageModal.css（样式修正）
-- iconMap.ts（图标映射表）
-- 截图对比（修复前 / 修复后）
-
----
-> 本方案由 Agent 持续集成生成于 ${now}（已根据驳回意见修订）
-> 修订说明：本次方案不再套用模板，而是根据实际驳回意见，从代码层面分析根因并给出具体修复方案
-`;
+function getNextPhase(currentPhase) {
+  const idx = DISPATCH_CHAIN.indexOf(currentPhase);
+  if (idx >= 0 && idx < DISPATCH_CHAIN.length - 1) {
+    return DISPATCH_CHAIN[idx + 1];
   }
+  return null;
+}
 
-  // 非前端 或 无驳回意见：走通用模板
-  return `# 技术方案：${reqTitle}
+function dispatchNextPhase(db, techPlan, catAgents) {
+  const nextPhase = getNextPhase(techPlan.dispatch_phase);
+  if (!nextPhase) return;
 
-## 需求背景
-${reqDesc || '针对' + reqTitle + '的需求开发'}
+  // 查找下一个阶段是否已有方案
+  const existingNext = db.prepare(`
+    SELECT id FROM tech_plans
+    WHERE requirement_id = ? AND dispatch_phase = ? AND deleted = 0
+    ORDER BY version DESC LIMIT 1
+  `).get(techPlan.requirement_id, nextPhase);
 
-## 审核意见
-${auditComment || '（无）'}
+  if (existingNext) return; // 已有方案，无需重复创建
 
----
-> 生成于 ${now}
-`;
+  const nextAgent = catAgents[nextPhase];
+  if (!nextAgent) return;
+
+  // 检查该类别方案是否已达4个版本上限
+  const existingCount = db.prepare(
+    'SELECT COUNT(*) as count FROM tech_plans WHERE requirement_id = ? AND category = ? AND deleted = 0'
+  ).get(techPlan.requirement_id, nextPhase);
+  if (existingCount.count >= 4) return;
+
+  // 创建新方案记录（空内容，等待 Agent 填充）
+  db.prepare(`
+    INSERT INTO tech_plans (requirement_id, category, author_id, content, version, audit_status, review_status, dispatch_phase)
+    VALUES (?, ?, ?, '', 1, 'pending', 'generating', ?)
+  `).run(techPlan.requirement_id, nextPhase, nextAgent.id, nextPhase);
+
+  const catLabel = catNames[nextPhase] || nextPhase;
+  const reqTitle = db.prepare('SELECT title FROM requirements WHERE id = ?').get(techPlan.requirement_id);
+  db.prepare(`
+    INSERT INTO notifications (agent_id, type, title, content)
+    VALUES (?, 'tech_plan_task', '📋 技术方案任务 - ' + ?, '需求「' + ? + '」的前序方案已通过评审，请完成「' + ? + '」技术方案文档并提交。需求ID：' + ?)
+  `).run(nextAgent.id, catLabel, reqTitle ? reqTitle.title : '', catLabel, techPlan.requirement_id);
 }
 
 // Agent 提交技术方案内容（由 Agent 主动调用，提交 markdown 文档内容）
 router.post('/:id/submit', (req, res) => {
   const db = getDB();
-  const { content } = req.body;
+  const { content, retrieval_log } = req.body;
 
   const techPlan = db.prepare('SELECT * FROM tech_plans WHERE id = ? AND deleted = 0').get(req.params.id);
   if (!techPlan) {
@@ -443,11 +412,11 @@ router.post('/:id/submit', (req, res) => {
     return res.status(400).json({ code: 400, message: '技术方案内容不能为空' });
   }
 
-  // 更新方案内容，状态变为 review（待评审）
+  // 更新方案内容 + retrieval_log，状态变为 review（待评审）
   db.prepare(`
-    UPDATE tech_plans SET content = ?, review_status = 'review', updated_at = CURRENT_TIMESTAMP
+    UPDATE tech_plans SET content = ?, retrieval_log = COALESCE(?, retrieval_log), review_status = 'review', updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
-  `).run(content, req.params.id);
+  `).run(content, retrieval_log || null, req.params.id);
 
   res.json({ code: 0, message: '技术方案已提交，等待审核' });
 });
