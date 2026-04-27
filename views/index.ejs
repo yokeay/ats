@@ -1384,7 +1384,7 @@
           html += '<td>' + (r.owner_emoji || '') + ' ' + (r.owner_name || '<span style="color:var(--text-muted)">-</span>') + '</td>';
           html += '<td style="font-size:12px;color:var(--text-muted)">' + planTime + '</td>';
           html += '<td style="font-size:12px">' + r.created_at + '</td>';
-          html += '<td><button class="btn-icon"' + (r.status === 'review' ? ' onclick="reviewRequirement(' + r.id + ')"' : ' disabled style="opacity:0.3;cursor:not-allowed"') + ' title="评审">📋</button><button class="btn-icon" onclick="showEditRequirement(' + r.id + ')" title="编辑">✏️</button><button class="btn-icon btn-icon-danger" onclick="deleteRequirement(' + r.id + ')" title="删除">🗑️</button></td>';
+          html += '<td style="display:flex;align-items:center;gap:6px"><button class="btn-icon"' + (r.status === 'review' ? ' onclick="reviewRequirement(' + r.id + ',' + JSON.stringify(r.title).replace(/"/g, '&quot;') + ')"' : ' disabled style="opacity:0.3;cursor:not-allowed"') + ' title="评审">📋</button><button class="btn-icon" onclick="showEditRequirement(' + r.id + ')" title="编辑">✏️</button><button class="btn-icon btn-icon-danger" onclick="deleteRequirement(' + r.id + ')" title="删除">🗑️</button></td>';
           html += '</tr>';
         }
         tbody.innerHTML = html;
@@ -1474,16 +1474,97 @@
       }
     }
 
-    // 评审需求
-    function reviewRequirement(id) {
+    // 评审需求 - 带进度面板
+    function reviewRequirement(id, title) {
       closeDrawer();
-      api('/api/requirements/' + id + '/review', { method: 'POST' }).then(function(data) {
-        showToast('success', '评审成功', data.message || '需求评审通过，已自动生成技术方案');
-        loadRequirements();
-        if (currentView === 'tech') loadTechPlans();
-      }).catch(function(e) {
-        showToast('error', '评审失败', e.message);
-      });
+      var now = new Date();
+      function fmtTime(d) { return d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0') + ':' + d.getSeconds().toString().padStart(2,'0'); }
+
+      var startStr = fmtTime(now);
+
+      var body =
+        '<div style="text-align:center;padding:12px 0 0;font-size:14px;color:var(--text-secondary)">评审需求：<strong style="color:var(--text-primary)">' + escapeHtml(title || '') + '</strong></div>' +
+        '<div class="timeline" id="reviewTimeline">' +
+          '<div class="timeline-item done" id="reviewStep1"><div class="timeline-dot"></div><div class="timeline-content"><div class="timeline-title">已启动评审</div><div class="timeline-time" style="font-size:12px;color:var(--text-muted)">' + startStr + '</div></div></div>' +
+        '</div>' +
+        '<div style="margin-top:24px">' +
+          '<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text-muted);margin-bottom:8px"><span>评审进度</span><span id="reviewPct">0%</span></div>' +
+          '<div style="height:8px;background:var(--bg-secondary);border-radius:4px;overflow:hidden"><div id="reviewProgressBar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--accent-green),#34d399);border-radius:4px;transition:width 0.5s ease"></div></div>' +
+        '</div>';
+      showModal('需求评审', body, '');
+
+      // Hide footer
+      document.getElementById('modalFooter').style.display = 'none';
+
+      // Timeline steps configuration
+      var steps = [
+        { id: 'reviewStep1', delay: 0, label: '已启动评审', done: true, pct: 0 },
+        { id: 'reviewStep2', delay: 800, label: '正在分析需求', done: false, pct: 15 },
+        { id: 'reviewStep3', delay: 1800, label: 'Leader分析完毕，正在下发任务', done: false, pct: 35 },
+        { id: 'reviewStep4', delay: 2800, label: '技术方案参与人分析完毕，正在转发消息', done: false, pct: 55 },
+        { id: 'reviewStep5', delay: 3600, label: '消息转发完毕，已通知Agent', done: false, pct: 70 },
+        { id: 'reviewStep6', delay: 4400, label: '等待Agent产生方案...', done: false, pct: 85 },
+        { id: 'reviewStep7', delay: 6000, label: '方案生成完成', done: false, pct: 100 }
+      ];
+
+      var timelineEl = null;
+      var progressEl = null;
+      var pctEl = null;
+
+      function getEls() {
+        timelineEl = document.getElementById('reviewTimeline');
+        progressEl = document.getElementById('reviewProgressBar');
+        pctEl = document.getElementById('reviewPct');
+      }
+
+      var timers = [];
+      for (var i = 1; i < steps.length; i++) {
+        (function(step, idx) {
+          var t = setTimeout(function() {
+            getEls();
+            var timestr = fmtTime(new Date());
+
+            // Mark all previous steps as done
+            for (var j = 0; j < idx; j++) {
+              var prev = document.getElementById(steps[j].id);
+              if (prev) prev.className = 'timeline-item done';
+            }
+
+            // Add current step as done
+            var html = '<div class="timeline-item done" id="' + step.id + '">' +
+              '<div class="timeline-dot"></div>' +
+              '<div class="timeline-content">' +
+              '<div class="timeline-title">' + step.label + '</div>' +
+              '<div class="timeline-time" style="font-size:12px;color:var(--text-muted)">' + timestr + '</div>' +
+              '</div></div>';
+            timelineEl.insertAdjacentHTML('beforeend', html);
+
+            // Update progress
+            progressEl.style.width = step.pct + '%';
+            pctEl.textContent = step.pct + '%';
+          }, step.delay);
+          timers.push(t);
+        })(steps[i], i);
+      }
+
+      // Final step: call API and close
+      var finalizeTimer = setTimeout(function() {
+        getEls();
+        api('/api/requirements/' + id + '/review', { method: 'POST' }).then(function(data) {
+          closeModal();
+          document.getElementById('modalFooter').style.display = '';
+          showToast('success', '评审成功', data.message || '技术方案已产生，请浏览');
+          loadRequirements();
+          if (currentView === 'tech') loadTechPlans();
+        }).catch(function(e) {
+          closeModal();
+          document.getElementById('modalFooter').style.display = '';
+          showToast('error', '评审失败', e.message);
+        });
+      }, 7000);
+
+      // On next tick to grab els
+      setTimeout(getEls, 50);
     }
 
     // 项目详情抽屉
@@ -1994,7 +2075,8 @@
       chevron.textContent = isOpen ? '▶' : '▼';
     }
 
-    // 技术方案详情（markdown 渲染）
+    // 技术方案详情（markdown 渲染）+ 轮询检测生成状态
+    var techPlanPollTimer = null;
     async function showTechPlanDetail(id) {
       try {
         var tp = await api('/api/tech-plans/' + id);
@@ -2083,9 +2165,43 @@
           '</div>';
         document.getElementById('drawerOverlay').classList.add('show');
         document.getElementById('taskDrawer').classList.add('show');
+
+        // 轮询检测：如果是生成中状态，每2秒检查一次
+        var pollInterval = 2000;
+        var maxPolls = 60; // 最多轮询2分钟
+        var pollCount = 0;
+
+        if (isGenerating) {
+          techPlanPollTimer = setInterval(function() {
+            pollCount++;
+            api('/api/tech-plans/' + id).then(function(updated) {
+              if (updated.review_status === 'generating' && pollCount < maxPolls) {
+                // 仍在生成中，更新显示的创建时间等信息
+                // 不需要重新加载整个页面
+                return;
+              }
+              // 已完成生成或超时
+              clearInterval(techPlanPollTimer);
+              if (updated.review_status !== 'generating') {
+                showTechPlanDetail(id);
+              }
+            }).catch(function(e) {
+              // API 失败时继续轮询
+            });
+          }, pollInterval);
+        }
       } catch (e) {
+        clearInterval(techPlanPollTimer);
         showToast('error', '加载失败', e.message);
       }
+    }
+
+    // 关闭抽屉时清除轮询定时器
+    function closeDrawer() {
+      clearInterval(techPlanPollTimer);
+      techPlanPollTimer = null;
+      document.getElementById('drawerOverlay').classList.remove('show');
+      document.getElementById('taskDrawer').classList.remove('show');
     }
 
     function submitTechPlanDeepMode(id) {
