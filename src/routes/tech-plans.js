@@ -251,8 +251,16 @@ router.post('/:id/audit', (req, res) => {
     // 派发下一阶段（根据 dispatch_phase 链）
     dispatchNextPhase(db, techPlan, catAgents);
   } else {
-    // 驳回：将状态设为 generating，通知 Agent 重新生成
-    db.prepare(`UPDATE tech_plans SET audit_status = 'reject', auditor_id = 'leader-001', audited_at = CURRENT_TIMESTAMP, audit_comment = ?, review_status = 'generating', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(comment, req.params.id);
+    // 驳回：将当前版本标记为驳回，创建新版本记录
+    const maxVersion = db.prepare('SELECT MAX(version) as maxv FROM tech_plans WHERE requirement_id = ? AND category = ? AND deleted = 0').get(techPlan.requirement_id, techPlan.category).maxv || 1;
+    const newVersion = maxVersion + 1;
+
+    // 当前版本标记为驳回
+    db.prepare(`UPDATE tech_plans SET audit_status = 'reject', auditor_id = 'leader-001', audited_at = CURRENT_TIMESTAMP, audit_comment = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(comment, req.params.id);
+
+    // 创建新版本记录，状态设为 generating
+    db.prepare(`INSERT INTO tech_plans (requirement_id, category, author_id, content, version, audit_status, review_status, dispatch_phase) VALUES (?, ?, ?, ?, ?, 'pending', 'generating', ?)`)
+      .run(techPlan.requirement_id, techPlan.category, techPlan.author_id, techPlan.content || '', newVersion, techPlan.dispatch_phase);
 
     // 通知负责人
     db.prepare(`

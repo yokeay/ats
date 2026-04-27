@@ -833,40 +833,83 @@
       try {
         var lp = await api('/api/local-projects/' + projectId);
         document.getElementById('lpDrawerTitle').textContent = '本地项目: ' + (lp.project_name || '未命名');
+
         var statusLabel = { running: '运行中', stopped: '已停止' };
         var statusClass = { running: 'running', stopped: 'stopped' };
+
         var itemsHtml = '';
         if (lp.items && lp.items.length > 0) {
-          itemsHtml = '<table style="width:100%;border-collapse:collapse;margin-top:12px"><thead><tr style="border-bottom:1px solid var(--border-color)"><th style="text-align:left;padding:8px 4px;color:var(--text-muted);font-weight:normal;font-size:12px">字段</th><th style="text-align:left;padding:8px 4px;color:var(--text-muted);font-weight:normal;font-size:12px">值</th></tr></thead><tbody>';
+          itemsHtml = '<div style="background:var(--bg-secondary);border-radius:10px;overflow:hidden;border:1px solid var(--border-color)">';
           for (var ki = 0; ki < lp.items.length; ki++) {
             var item = lp.items[ki];
-            itemsHtml += '<tr style="border-bottom:1px solid var(--border-color)"><td style="padding:8px 4px;font-weight:500">' + escapeHtml(item.item_key) + '</td><td style="padding:8px 4px;color:var(--text-muted);word-break:break-all">' + escapeHtml(item.item_value) + '</td></tr>';
+            var isLast = ki === lp.items.length - 1;
+            itemsHtml += '<div style="display:flex;padding:12px 16px;' + (isLast ? '' : 'border-bottom:1px solid var(--border-color)') + '">' +
+              '<div style="width:120px;color:var(--text-muted);font-size:13px;flex-shrink:0">' + escapeHtml(item.item_key) + '</div>' +
+              '<div style="color:var(--text-primary);font-size:13px;word-break:break-all;font-weight:500">' + escapeHtml(item.item_value) + '</div>' +
+            '</div>';
           }
-          itemsHtml += '</tbody></table>';
+          itemsHtml += '</div>';
         } else {
-          itemsHtml = '<div style="color:var(--text-muted);font-size:13px;padding:8px 0">暂无配置项</div>';
+          itemsHtml = '<div style="text-align:center;padding:30px;background:var(--bg-secondary);border-radius:10px;border:1px dashed var(--border-color);color:var(--text-muted);font-size:13px">暂无配置项</div>';
         }
-        var html = '<div style="display:flex;flex-direction:column;gap:16px">';
-        html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">';
-        html += '<div class="form-group" style="margin:0"><label class="form-label">项目名称</label><div style="padding:8px 12px;background:var(--bg-main);border-radius:8px;border:1px solid var(--border-color);font-size:14px">' + escapeHtml(lp.project_name || '未命名') + '</div></div>';
-        html += '<div class="form-group" style="margin:0"><label class="form-label">运行地址</label><div style="padding:8px 12px;background:var(--bg-main);border-radius:8px;border:1px solid var(--border-color);font-size:14px;color:' + (lp.port ? 'var(--accent-green)' : 'var(--text-muted)') + '">' + (lp.port ? window.location.hostname + ':' + lp.port : '未运行') + '</div></div>';
-        html += '</div>';
-        html += '<div class="form-group" style="margin:0"><label class="form-label">启动命令</label><input class="form-input" id="lpCommand" value="' + escapeHtml(lp.start_command || '') + '" placeholder="如: node server.js"></div>';
-        html += '<div class="form-group" style="margin:0"><label class="form-label">工作目录</label><input class="form-input" id="lpWorkDir" value="' + escapeHtml(lp.work_dir || '') + '" placeholder="如: /home/myprojects/JavaScript/myapp"></div>';
-        html += '<div style="display:flex;align-items:center;gap:12px">';
-        html += '<span class="status-badge ' + (statusClass[lp.status] || 'stopped') + '">' + (statusLabel[lp.status] || '已停止') + '</span>';
+
+        var html = '<div style="padding:24px;display:flex;flex-direction:column;gap:24px">';
+
+        // Header Section with Status
+        html += '<div style="display:flex;justify-content:space-between;align-items:flex-start">' +
+          '<div>' +
+            '<div style="font-size:20px;font-weight:600;margin-bottom:4px">' + escapeHtml(lp.project_name || '未命名') + '</div>' +
+            '<div style="display:flex;align-items:center;gap:8px">' +
+              '<span class="status-badge ' + (statusClass[lp.status] || 'stopped') + '">' + (statusLabel[lp.status] || '已停止') + '</span>' +
+              '<span style="font-size:12px;color:var(--text-muted)">CODE: ' + (lp.project_code || '-') + '</span>' +
+            '</div>' +
+          '</div>' +
+          '<div style="display:flex;gap:8px">';
+
         if (lp.status === 'running') {
-          html += '<a href="http://' + window.location.hostname + ':' + lp.port + '" target="_blank" class="btn btn-secondary" style="text-decoration:none">访问项目</a>';
-          html += '<button class="btn btn-danger" onclick="lpStopProject(' + projectId + ')">停止</button>';
+          html += '<button class="btn btn-danger" onclick="lpStopProject(' + projectId + ')">⏹️ 停止</button>';
         } else {
-          html += '<button class="btn btn-primary" onclick="lpStartProject(' + projectId + ')">启动项目</button>';
+          html += '<button class="btn btn-primary" onclick="lpStartProject(' + projectId + ')">▶️ 启动</button>';
         }
-        html += '<button class="btn btn-secondary" onclick="lpSaveProject(' + projectId + ')">保存配置</button>';
-        html += '</div>';
-        html += '<div style="border-top:1px solid var(--border-color);padding-top:12px">';
-        html += '<div style="margin-bottom:8px"><span style="font-weight:500;font-size:13px">配置项</span></div>';
-        html += itemsHtml;
-        html += '</div>';
+
+        html += '<button class="btn btn-secondary" onclick="showEditProject(' + projectId + ')">✏️ 编辑</button>' +
+          '</div>' +
+        '</div>';
+
+        // Stats/Info Grid
+        html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">' +
+          '<div style="background:var(--bg-secondary);padding:16px;border-radius:12px;border:1px solid var(--border-color)">' +
+            '<div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;margin-bottom:8px;display:flex;align-items:center;gap:4px">🌐 运行地址</div>' +
+            '<div style="font-size:15px;font-weight:600;color:' + (lp.port ? 'var(--accent-green)' : 'var(--text-muted)') + '">' +
+              (lp.port ? '<a href="http://' + window.location.hostname + ':' + lp.port + '" target="_blank" style="color:inherit;text-decoration:none">' + window.location.hostname + ':' + lp.port + ' ↗️</a>' : '未运行') +
+            '</div>' +
+          '</div>' +
+          '<div style="background:var(--bg-secondary);padding:16px;border-radius:12px;border:1px solid var(--border-color)">' +
+            '<div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;margin-bottom:8px;display:flex;align-items:center;gap:4px">🆔 进程 PID</div>' +
+            '<div style="font-size:15px;font-weight:600">' + (lp.pid || '-') + '</div>' +
+          '</div>' +
+        '</div>';
+
+        // Command & Dir Section
+        html += '<div style="display:flex;flex-direction:column;gap:16px">' +
+          '<div>' +
+            '<label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:8px">🚀 启动命令</label>' +
+            '<div style="background:var(--bg-main);padding:12px;border-radius:8px;font-family:monospace;font-size:13px;border:1px solid var(--border-color);color:var(--accent-blue)">' + escapeHtml(lp.start_command || '未配置') + '</div>' +
+          '</div>' +
+          '<div>' +
+            '<label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:8px">📂 工作目录</label>' +
+            '<div style="background:var(--bg-main);padding:12px;border-radius:8px;font-family:monospace;font-size:12px;border:1px solid var(--border-color);word-break:break-all">' + escapeHtml(lp.work_dir || '未配置') + '</div>' +
+          '</div>' +
+        '</div>';
+
+        // Config Items Section
+        html += '<div style="margin-top:8px">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">' +
+            '<div style="font-weight:600;font-size:14px;display:flex;align-items:center;gap:6px">⚙️ 配置参数</div>' +
+          '</div>' +
+          itemsHtml +
+        '</div>';
+
         html += '</div>';
         document.getElementById('lpDrawerBody').innerHTML = html;
         openLocalProjectDrawer();
@@ -888,7 +931,6 @@
 
     async function lpStartProject(projectId) {
       try {
-        await lpSaveProject(projectId);
         var btn = document.querySelector('.btn-primary');
         if (btn) { btn.disabled = true; btn.textContent = '启动中...'; }
         await api('/api/local-projects/' + projectId + '/start', { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' });
@@ -1163,7 +1205,7 @@
 
     function showCreateProject() {
       showModal('新建项目',
-        '<form onsubmit="createProject(event)"><div class="form-group"><label class="form-label">项目名称</label><input name="name" class="form-input" required placeholder="请输入项目名称"></div><div class="form-group"><label class="form-label">项目描述</label><textarea name="description" class="form-textarea" placeholder="请输入项目描述（可选）"></textarea></div><div class="form-group"><label class="form-label">阶段</label><select name="phase" class="form-select"><option value="start">Start</option><option value="alpha">Alpha</option><option value="beta">Beta</option><option value="rc">RC</option></select></div><div class="form-group"><label class="form-label">状态</label><select name="status" class="form-select"><option value="pending">未开始</option><option value="active" selected>进行中</option><option value="ended">已结束</option></select></div><div style="border-top:1px solid var(--border-color);margin-top:16px;padding-top:16px"><div style="margin-bottom:12px;font-weight:500;font-size:13px">本地项目配置</div><div class="form-group"><label class="form-label">工作目录</label><input name="work_dir" class="form-input" placeholder="如: /home/myprojects/JavaScript/myapp"></div><div class="form-group"><label class="form-label">启动命令</label><input name="start_command" class="form-input" placeholder="如: npm run dev"></div><div class="form-group"><label class="form-label">配置项（每行一个，格式: 字段名:值）</label><textarea name="local_items" class="form-textarea" style="height:100px;font-family:monospace;font-size:12px" placeholder="仓库地址: https://github.com/xxx/xxx.git&#10;技术栈: React, Node.js&#10;默认端口: 3000"></textarea></div></div></form>',
+        '<form onsubmit="createProject(event)"><div class="form-group"><label class="form-label">项目名称</label><input name="name" class="form-input" required placeholder="请输入项目名称"></div><div class="form-group"><label class="form-label">项目描述</label><textarea name="description" class="form-textarea" placeholder="请输入项目描述（可选）"></textarea></div><div class="form-group"><label class="form-label">阶段</label><select name="phase" class="form-select"><option value="start">Start</option><option value="alpha">Alpha</option><option value="beta">Beta</option><option value="rc">RC</option></select></div><div class="form-group"><label class="form-label">状态</label><select name="status" class="form-select"><option value="pending">未开始</option><option value="active" selected>进行中</option><option value="ended">已结束</option></select></div><div style="border-top:1px solid var(--border-color);margin-top:16px;padding-top:16px"><div style="margin-bottom:12px;font-weight:500;font-size:13px">本地项目配置</div><div class="form-group"><label class="form-label">工作目录</label><input name="work_dir" class="form-input" placeholder="如: /home/myprojects/JavaScript/myapp"></div></div></form>',
         '<button type="button" class="btn btn-secondary" onclick="closeModal()">取消</button><button type="submit" class="btn btn-primary">创建</button>',
         '600px'
       );
@@ -1172,21 +1214,6 @@
     function createProject(e) {
       e.preventDefault();
       var form = e.target;
-      var local_items = [];
-      var itemsText = form.local_items.value.trim();
-      if (itemsText) {
-        var lines = itemsText.split('\n');
-        for (var i = 0; i < lines.length; i++) {
-          var line = lines[i].trim();
-          if (!line) continue;
-          var colonIdx = line.indexOf(':');
-          if (colonIdx > 0) {
-            local_items.push({ item_key: line.substring(0, colonIdx).trim(), item_value: line.substring(colonIdx + 1).trim() });
-          } else if (line) {
-            local_items.push({ item_key: line, item_value: '' });
-          }
-        }
-      }
       api('/api/projects', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -1195,9 +1222,7 @@
           description: form.description.value,
           phase: form.phase.value,
           status: form.status.value,
-          work_dir: form.work_dir.value,
-          start_command: form.start_command.value,
-          local_items: local_items
+          work_dir: form.work_dir.value
         })
       }).then(function() {
         closeModal();
@@ -1706,13 +1731,11 @@
           '<td style="width:70px"><span class="status-badge ' + pm.class + '" style="font-size:10px">' + pm.text + '</span></td>' +
           '<td style="width:100px">' + (tp.author_emoji || '') + ' ' + (tp.author_name || '') + '</td>' +
           '<td style="width:60px"><span style="cursor:pointer;color:var(--accent-blue);font-weight:600" onclick="showTechPlanVersions(' + tp.requirement_id + ', \'' + tp.category + '\')">V' + tp.version + '</span></td>' +
-          '<td style="width:90px"><span class="status-badge ' + am.class + '">' + am.text + '</span></td>' +
-          '<td style="width:90px"><span class="status-badge ' + sm.class + '">' + sm.text + '</span></td>' +
+          '<td style="width:90px"><span class="status-badge ' + am.class + '" style="cursor:pointer" onclick="showAuditTechPlan(' + tp.id + ')">' + am.text + '</span></td>' +
+          '<td style="width:90px"><span class="status-badge ' + sm.class + '"' + (canReview ? ' style="cursor:pointer;color:var(--accent-green)"' : '') + ' onclick="' + (canReview ? 'reviewTechPlan(' + tp.id + ')' : '') + '">' + sm.text + '</span></td>' +
           '<td style="width:140px;font-size:12px;color:var(--text-muted)">' + (tp.updated_at || '') + '</td>' +
-          '<td style="width:200px;white-space:nowrap">' +
+          '<td style="width:100px;white-space:nowrap">' +
             '<button class="btn-icon" onclick="showEditTechPlan(' + tp.id + ')" title="编辑">✏️</button>' +
-            '<button class="btn-icon" onclick="showAuditTechPlan(' + tp.id + ')" title="审核" style="color:var(--accent-blue)">📝</button>' +
-            '<button class="btn-icon' + (canReview ? '' : ' disabled') + '" onclick="' + (canReview ? 'reviewTechPlan(' + tp.id + ')' : '') + '" title="评审' + (canReview ? '' : '（需审核通过）') + '" style="color:' + (canReview ? 'var(--success)' : 'var(--text-muted)') + '">✅</button>' +
             '<button class="btn-icon" onclick="deleteTechPlan(' + tp.id + ')" title="删除" style="color:var(--danger)">🗑️</button>' +
           '</td></tr>';
       }
