@@ -185,7 +185,7 @@
                   <th style="width:90px">审核状态</th>
                   <th style="width:90px">评审状态</th>
                   <th style="width:140px">更新时间</th>
-                  <th style="width:200px">操作</th>
+                  <th style="width:100px">操作</th>
                 </tr>
               </thead>
               <tbody id="techPlansTableBody">
@@ -1722,6 +1722,7 @@
         var am = auditMap[tp.audit_status] || {text: tp.audit_status, class: ''};
         var sm = statusMap[tp.review_status] || {text: tp.review_status, class: ''};
         var pm = phaseMap[tp.dispatch_phase] || {text: tp.dispatch_phase, class: ''};
+        var canAudit = tp.audit_status === 'pending';
         var canReview = tp.audit_status === 'pass' && tp.review_status === 'review';
         html += '<tr>' +
           '<td style="width:50px">' + tp.id + '</td>' +
@@ -1731,8 +1732,8 @@
           '<td style="width:70px"><span class="status-badge ' + pm.class + '" style="font-size:10px">' + pm.text + '</span></td>' +
           '<td style="width:100px">' + (tp.author_emoji || '') + ' ' + (tp.author_name || '') + '</td>' +
           '<td style="width:60px"><span style="cursor:pointer;color:var(--accent-blue);font-weight:600" onclick="showTechPlanVersions(' + tp.requirement_id + ', \'' + tp.category + '\')">V' + tp.version + '</span></td>' +
-          '<td style="width:90px"><span class="status-badge ' + am.class + '" style="cursor:pointer" onclick="showAuditTechPlan(' + tp.id + ')">' + am.text + '</span></td>' +
-          '<td style="width:90px"><span class="status-badge ' + sm.class + '"' + (canReview ? ' style="cursor:pointer;color:var(--accent-green)"' : '') + ' onclick="' + (canReview ? 'reviewTechPlan(' + tp.id + ')' : '') + '">' + sm.text + '</span></td>' +
+          '<td style="width:90px"><span class="status-badge ' + am.class + '" ' + (canAudit ? 'style="cursor:pointer;color:var(--accent-blue)" onclick="showAuditTechPlan(' + tp.id + ')"' : '') + '>' + am.text + '</span></td>' +
+          '<td style="width:90px"><span class="status-badge ' + sm.class + '" ' + (canReview ? 'style="cursor:pointer;color:var(--accent-green)" onclick="reviewTechPlan(' + tp.id + ')"' : '') + '>' + sm.text + '</span></td>' +
           '<td style="width:140px;font-size:12px;color:var(--text-muted)">' + (tp.updated_at || '') + '</td>' +
           '<td style="width:100px;white-space:nowrap">' +
             '<button class="btn-icon" onclick="showEditTechPlan(' + tp.id + ')" title="编辑">✏️</button>' +
