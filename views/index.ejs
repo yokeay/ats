@@ -1163,14 +1163,30 @@
 
     function showCreateProject() {
       showModal('新建项目',
-        '<form onsubmit="createProject(event)"><div class="form-group"><label class="form-label">项目名称</label><input name="name" class="form-input" required placeholder="请输入项目名称"></div><div class="form-group"><label class="form-label">项目描述</label><textarea name="description" class="form-textarea" placeholder="请输入项目描述（可选）"></textarea></div><div class="form-group"><label class="form-label">阶段</label><select name="phase" class="form-select"><option value="start">Start</option><option value="alpha">Alpha</option><option value="beta">Beta</option><option value="rc">RC</option></select></div><div class="form-group"><label class="form-label">状态</label><select name="status" class="form-select"><option value="pending">未开始</option><option value="active">进行中</option><option value="ended">已结束</option></select></div></form>',
-        '<button type="button" class="btn btn-secondary" onclick="closeModal()">取消</button><button type="submit" class="btn btn-primary">创建</button>'
+        '<form onsubmit="createProject(event)"><div class="form-group"><label class="form-label">项目名称</label><input name="name" class="form-input" required placeholder="请输入项目名称"></div><div class="form-group"><label class="form-label">项目描述</label><textarea name="description" class="form-textarea" placeholder="请输入项目描述（可选）"></textarea></div><div class="form-group"><label class="form-label">阶段</label><select name="phase" class="form-select"><option value="start">Start</option><option value="alpha">Alpha</option><option value="beta">Beta</option><option value="rc">RC</option></select></div><div class="form-group"><label class="form-label">状态</label><select name="status" class="form-select"><option value="pending">未开始</option><option value="active" selected>进行中</option><option value="ended">已结束</option></select></div><div style="border-top:1px solid var(--border-color);margin-top:16px;padding-top:16px"><div style="margin-bottom:12px;font-weight:500;font-size:13px">本地项目配置</div><div class="form-group"><label class="form-label">工作目录</label><input name="work_dir" class="form-input" placeholder="如: /home/myprojects/JavaScript/myapp"></div><div class="form-group"><label class="form-label">启动命令</label><input name="start_command" class="form-input" placeholder="如: npm run dev"></div><div class="form-group"><label class="form-label">配置项（每行一个，格式: 字段名:值）</label><textarea name="local_items" class="form-textarea" style="height:100px;font-family:monospace;font-size:12px" placeholder="仓库地址: https://github.com/xxx/xxx.git&#10;技术栈: React, Node.js&#10;默认端口: 3000"></textarea></div></div></form>',
+        '<button type="button" class="btn btn-secondary" onclick="closeModal()">取消</button><button type="submit" class="btn btn-primary">创建</button>',
+        '600px'
       );
     }
 
     function createProject(e) {
       e.preventDefault();
       var form = e.target;
+      var local_items = [];
+      var itemsText = form.local_items.value.trim();
+      if (itemsText) {
+        var lines = itemsText.split('\n');
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i].trim();
+          if (!line) continue;
+          var colonIdx = line.indexOf(':');
+          if (colonIdx > 0) {
+            local_items.push({ item_key: line.substring(0, colonIdx).trim(), item_value: line.substring(colonIdx + 1).trim() });
+          } else if (line) {
+            local_items.push({ item_key: line, item_value: '' });
+          }
+        }
+      }
       api('/api/projects', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -1178,7 +1194,10 @@
           name: form.name.value,
           description: form.description.value,
           phase: form.phase.value,
-          status: form.status.value
+          status: form.status.value,
+          work_dir: form.work_dir.value,
+          start_command: form.start_command.value,
+          local_items: local_items
         })
       }).then(function() {
         closeModal();
@@ -1192,9 +1211,17 @@
     async function showEditProject(id) {
       try {
         var p = await api('/api/projects/' + id);
+        var lp = await api('/api/local-projects/' + id);
+        var itemsText = '';
+        if (lp.items && lp.items.length > 0) {
+          for (var ki = 0; ki < lp.items.length; ki++) {
+            itemsText += lp.items[ki].item_key + ':' + lp.items[ki].item_value + '\n';
+          }
+        }
         showModal('编辑项目',
-          '<div id="editProjectForm"><div class="form-group"><label class="form-label">项目名称</label><input id="ep-name" class="form-input" required value="' + escapeHtml(p.name) + '"></div><div class="form-group"><label class="form-label">项目描述</label><textarea id="ep-desc" class="form-textarea">' + escapeHtml(p.description || '') + '</textarea></div><div class="form-group"><label class="form-label">阶段</label><select id="ep-phase" class="form-select"><option value="start"' + (p.phase === 'start' ? ' selected' : '') + '>Start</option><option value="alpha"' + (p.phase === 'alpha' ? ' selected' : '') + '>Alpha</option><option value="beta"' + (p.phase === 'beta' ? ' selected' : '') + '>Beta</option><option value="rc"' + (p.phase === 'rc' ? ' selected' : '') + '>RC</option></select></div><div class="form-group"><label class="form-label">状态</label><select id="ep-status" class="form-select"><option value="pending"' + (p.status === 'pending' ? ' selected' : '') + '>未开始</option><option value="active"' + (p.status === 'active' ? ' selected' : '') + '>进行中</option><option value="ended"' + (p.status === 'ended' ? ' selected' : '') + '>已结束</option></select></div></div>',
-          '<button type="button" class="btn btn-secondary" onclick="closeModal()">取消</button><button type="button" class="btn btn-primary" onclick="submitEditProject(' + id + ')">保存</button>'
+          '<div id="editProjectForm"><div class="form-group"><label class="form-label">项目名称</label><input id="ep-name" class="form-input" required value="' + escapeHtml(p.name) + '"></div><div class="form-group"><label class="form-label">项目描述</label><textarea id="ep-desc" class="form-textarea">' + escapeHtml(p.description || '') + '</textarea></div><div class="form-group"><label class="form-label">阶段</label><select id="ep-phase" class="form-select"><option value="start"' + (p.phase === 'start' ? ' selected' : '') + '>Start</option><option value="alpha"' + (p.phase === 'alpha' ? ' selected' : '') + '>Alpha</option><option value="beta"' + (p.phase === 'beta' ? ' selected' : '') + '>Beta</option><option value="rc"' + (p.phase === 'rc' ? ' selected' : '') + '>RC</option></select></div><div class="form-group"><label class="form-label">状态</label><select id="ep-status" class="form-select"><option value="pending"' + (p.status === 'pending' ? ' selected' : '') + '>未开始</option><option value="active"' + (p.status === 'active' ? ' selected' : '') + '>进行中</option><option value="ended"' + (p.status === 'ended' ? ' selected' : '') + '>已结束</option></select></div><div style="border-top:1px solid var(--border-color);margin-top:16px;padding-top:16px"><div style="margin-bottom:12px;font-weight:500;font-size:13px">本地项目配置</div><div class="form-group"><label class="form-label">工作目录</label><input id="ep-work-dir" class="form-input" value="' + escapeHtml(lp.work_dir || '') + '" placeholder="如: /home/myprojects/JavaScript/myapp"></div><div class="form-group"><label class="form-label">启动命令</label><input id="ep-start-cmd" class="form-input" value="' + escapeHtml(lp.start_command || '') + '" placeholder="如: npm run dev"></div><div class="form-group"><label class="form-label">配置项（每行一个，格式: 字段名:值）</label><textarea id="ep-items" class="form-textarea" style="height:100px;font-family:monospace;font-size:12px" placeholder="仓库地址: https://github.com/xxx/xxx.git&#10;技术栈: React, Node.js">' + escapeHtml(itemsText.trim()) + '</textarea></div></div></div>',
+          '<button type="button" class="btn btn-secondary" onclick="closeModal()">取消</button><button type="button" class="btn btn-primary" onclick="submitEditProject(' + id + ')">保存</button>',
+          '600px'
         );
       } catch (e) {
         showToast('error', '加载失败', e.message);
@@ -1206,6 +1233,9 @@
       var desc = document.getElementById('ep-desc').value;
       var phase = document.getElementById('ep-phase').value;
       var status = document.getElementById('ep-status').value;
+      var work_dir = document.getElementById('ep-work-dir').value;
+      var start_command = document.getElementById('ep-start-cmd').value;
+      var itemsText = document.getElementById('ep-items').value.trim();
       if (!name) {
         showToast('error', '错误', '项目名称不能为空');
         return;
@@ -1213,7 +1243,26 @@
       api('/api/projects/' + id, {
         method: 'PATCH',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({name: name, description: desc, phase: phase, status: status})
+        body: JSON.stringify({name: name, description: desc, phase: phase, status: status, work_dir: work_dir, start_command: start_command})
+      }).then(function() {
+        // 更新配置项
+        return api('/api/local-projects/' + id);
+      }).then(function(lp) {
+        // 删除旧配置项，重新写入
+        return api('/api/local-projects/' + id, {method: 'DELETE', headers: {'Content-Type': 'application/json'}, body: '{}'}).then(function() {
+          if (!itemsText) return Promise.resolve();
+          var lines = itemsText.split('\n');
+          var promises = [];
+          for (var i = 0; i < lines.length; i++) {
+            var line = lines[i].trim();
+            if (!line) continue;
+            var colonIdx = line.indexOf(':');
+            if (colonIdx > 0) {
+              promises.push(api('/api/local-projects/' + id + '/items', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({item_key: line.substring(0, colonIdx).trim(), item_value: line.substring(colonIdx + 1).trim()})}));
+            }
+          }
+          return Promise.all(promises);
+        });
       }).then(function() {
         closeModal();
         showToast('success', '更新成功', '项目已更新');

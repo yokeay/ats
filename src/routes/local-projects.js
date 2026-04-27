@@ -72,6 +72,14 @@ router.delete('/:projectId/items/:itemId', (req, res) => {
   res.json({ code: 0, data: items });
 });
 
+// 清空所有配置项
+router.delete('/:projectId/items', (req, res) => {
+  const db = getDB();
+  const lp = getOrCreateLocalProject(req.params.projectId);
+  db.prepare('DELETE FROM local_project_items WHERE local_project_id = ?').run(lp.id);
+  res.json({ code: 0, message: '配置项已清空' });
+});
+
 // 启动本地项目
 router.post('/:projectId/start', (req, res) => {
   const db = getDB();

@@ -71,7 +71,7 @@ router.get('/:id', (req, res) => {
 // 创建项目
 router.post('/', (req, res) => {
   const db = getDB();
-  const { name, description, phase, status } = req.body;
+  const { name, description, phase, status, start_command, work_dir, local_items } = req.body;
 
   if (!name) {
     return res.status(400).json({ code: 400, message: '项目名称不能为空' });
@@ -88,13 +88,28 @@ router.post('/', (req, res) => {
     VALUES (?, ?, ?, ?, ?)
   `).run(name, code, description || '', phase || 'start', status || 'pending');
 
-  res.json({ code: 0, data: { id: result.lastInsertRowid, code }, message: '项目创建成功' });
+  const projectId = result.lastInsertRowid;
+
+  // 创建本地项目记录
+  const lpResult = db.prepare('INSERT INTO local_projects (project_id, name, start_command, work_dir) VALUES (?, ?, ?, ?)').run(projectId, name, start_command || '', work_dir || '');
+  const lpId = lpResult.lastInsertRowid;
+
+  // 写入配置项
+  if (Array.isArray(local_items)) {
+    for (const item of local_items) {
+      if (item.item_key) {
+        db.prepare('INSERT INTO local_project_items (local_project_id, item_key, item_value) VALUES (?, ?, ?)').run(lpId, item.item_key, item.item_value || '');
+      }
+    }
+  }
+
+  res.json({ code: 0, data: { id: projectId, code }, message: '项目创建成功' });
 });
 
 // 更新项目
 router.patch('/:id', (req, res) => {
   const db = getDB();
-  const { name, description, phase, status } = req.body;
+  const { name, description, phase, status, start_command, work_dir } = req.body;
 
   const project = db.prepare('SELECT * FROM projects WHERE id = ? AND deleted = 0').get(req.params.id);
   if (!project) {
@@ -125,6 +140,19 @@ router.patch('/:id', (req, res) => {
   params.push(req.params.id);
 
   db.prepare(`UPDATE projects SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+
+  // 更新本地项目
+  if (start_command !== undefined || work_dir !== undefined) {
+    let lpUpdates = [];
+    let lpParams = [];
+    if (start_command !== undefined) { lpUpdates.push('start_command = ?'); lpParams.push(start_command); }
+    if (work_dir !== undefined) { lpUpdates.push('work_dir = ?'); lpParams.push(work_dir); }
+    if (lpUpdates.length > 0) {
+      lpUpdates.push('updated_at = CURRENT_TIMESTAMP');
+      lpParams.push(req.params.id);
+      db.prepare(`UPDATE local_projects SET ${lpUpdates.join(', ')} WHERE project_id = ?`).run(...lpParams);
+    }
+  }
 
   res.json({ code: 0, message: '项目更新成功' });
 });
