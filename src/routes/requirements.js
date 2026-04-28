@@ -2,6 +2,9 @@ const express = require('express');
 const router = express.Router();
 const { getDB } = require('../server/db');
 const { broadcastToAll } = require('../server/sse');
+const { sendToAgent, getActiveAgents } = require('../server/agent-manager');
+
+const catNames = { ui: 'UI原型', frontend: '前端', backend: '后端', test: '测试', ops: '运维' };
 
 // 获取所有需求（支持搜索、排序、分页）
 router.get('/', (req, res) => {
@@ -255,36 +258,84 @@ router.get('/:id/analysis', (req, res) => {
 });
 
 // 评审需求（通过评审 → 进行中）
-// 核心原则：评审只做状态变更 + 需求分析 + 派发第一阶段
-// 禁止直接同步生成技术方案内容（由模拟器异步执行 Deep Mode 后生成）
-router.post('/:id/review', (req, res) => {
+router.post('/:id/review', async (req, res) => {
   const db = getDB();
   const requirement = db.prepare('SELECT * FROM requirements WHERE id = ? AND deleted = 0').get(req.params.id);
   if (!requirement) {
     return res.status(404).json({ code: 404, message: '需求不存在' });
   }
 
-  // ===== Step 1: 分析需求内容，判断哪些阶段需要 =====
-  const content = (requirement.title || '').toLowerCase() + ' ' + (requirement.description || '').toLowerCase();
+  // ===== Step 1: 调用 Leader Agent 分析需求（等待结果，修复 #1） =====
+  let leaderResult = null;
+  try {
+    const analysisTask = {
+      type: 'requirement_analysis',
+      requirement_id: parseInt(req.params.id),
+      title: '分析需求: ' + requirement.title,
+      category: '',
+      content: `请分析以下需求，判断需要哪些阶段参与。
 
-  const needsUI = /界面|弹窗|页面|布局|组件|modal|dialog|图标|icon/.test(content);
-  const needsFrontend = /界面|弹窗|页面|布局|样式|ui|前端|页面|组件|modal|dialog|icon|图标|列表|表单|输入|按钮/.test(content);
-  const needsBackend = /接口|api|后端|数据库|服务器|接口|增删改查|crud|存储|认证|权限|token/.test(content);
-  const needsOps = /部署|上线|发布|docker|k8s|ci\/cd|ci|运维|nginx|反向代理/.test(content);
-  const needsTest = true; // 测试永远需要
+需求标题: ${requirement.title}
+需求描述: ${requirement.description || '无'}
 
-  const relevantCats = [];
-  if (needsUI) relevantCats.push('ui');
-  if (needsFrontend) relevantCats.push('frontend');
-  if (needsBackend) relevantCats.push('backend');
-  if (needsTest) relevantCats.push('test');
-  if (needsOps) relevantCats.push('ops');
+请严格以 JSON 格式返回（不要解释），格式如下：
+{
+  "categories": ["ui", "frontend", "backend", "test"],
+  "reason": "简要说明为什么需要这些阶段"
+}
 
-  if (relevantCats.length === 0) {
-    relevantCats.push('frontend'); // 默认前端
+可用的阶段：ui（界面设计）、frontend（前端页面）、backend（后端接口）、test（测试）、ops（部署运维）`
+    };
+    leaderResult = await sendToAgent('leader-001', analysisTask);
+  } catch (e) {
+    console.error('[requirements] Leader Agent 调用失败，使用正则分析:', e.message);
   }
 
-  // ===== Step 2: 保存需求分析结果（仅记录，不生成方案） =====
+  // ===== Step 2: 解析 Leader 结果或 fallback 到正则分析 =====
+  let relevantCats = [];
+
+  if (leaderResult && leaderResult.success && leaderResult.response) {
+    // 尝试从 Leader 返回中提取 JSON
+    try {
+      const jsonMatch = leaderResult.response.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (Array.isArray(parsed.categories) && parsed.categories.length > 0) {
+          relevantCats = parsed.categories;
+          console.log('[requirements] Leader 分析结果:', relevantCats.join(', '));
+        }
+      }
+    } catch (e) {
+      console.error('[requirements] 解析 Leader 结果失败:', e.message);
+    }
+  }
+
+  // Leader 失败则 fallback 到正则分析
+  if (relevantCats.length === 0) {
+    const content = (requirement.title || '').toLowerCase() + ' ' + (requirement.description || '').toLowerCase();
+
+    const needsUI = /界面|弹窗|页面|布局|组件|modal|dialog|图标|icon/.test(content);
+    const needsFrontend = /界面|弹窗|页面|布局|样式|ui|前端|页面|组件|modal|dialog|icon|图标|列表|表单|输入|按钮/.test(content);
+    const needsBackend = /接口|api|后端|数据库|服务器|接口|增删改查|crud|存储|认证|权限|token/.test(content);
+    const needsOps = /部署|上线|发布|docker|k8s|ci\/cd|ci|运维|nginx|反向代理/.test(content);
+
+    if (needsUI) relevantCats.push('ui');
+    if (needsFrontend) relevantCats.push('frontend');
+    if (needsBackend) relevantCats.push('backend');
+    relevantCats.push('test'); // 测试永远需要
+    if (needsOps) relevantCats.push('ops');
+
+    if (relevantCats.length === 0) relevantCats.push('frontend');
+
+    console.log('[requirements] 正则分析结果:', relevantCats.join(', '));
+  }
+
+  const needsUI = relevantCats.includes('ui');
+  const needsFrontend = relevantCats.includes('frontend');
+  const needsBackend = relevantCats.includes('backend');
+  const needsTest = relevantCats.includes('test');
+  const needsOps = relevantCats.includes('ops');
+
   db.prepare(`
     INSERT OR REPLACE INTO requirement_analysis (requirement_id, needs_ui, needs_frontend, needs_backend, needs_test, needs_ops, analysis_summary, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
@@ -298,47 +349,78 @@ router.post('/:id/review', (req, res) => {
     '涉及阶段：' + relevantCats.map(c => catNames[c] || c).join(' → ')
   );
 
-  // ===== Step 3: 只派发第一个阶段（generating 状态，模拟器接手） =====
+  // ===== Step 3: 派发第一个阶段给对应的 Agent =====
   const firstCat = relevantCats[0];
-  const catAgents = {
-    ui: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'UI Designer'").get(),
-    frontend: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'Frontend Engineer'").get(),
-    backend: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'Backend Engineer'").get(),
-    test: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'Test Engineer'").get(),
-    ops: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'DevOps Engineer'").get()
-  };
-
-  const firstAgent = catAgents[firstCat];
+  const firstAgent = getCategoryAgent(firstCat);
   if (firstAgent) {
-    // 检查是否已有该类别方案
     const existing = db.prepare(`
       SELECT id FROM tech_plans WHERE requirement_id = ? AND category = ? AND deleted = 0
       ORDER BY version DESC LIMIT 1
     `).get(req.params.id, firstCat);
 
     if (!existing) {
-      // 创建方案记录：状态为 generating（等待模拟器执行 Deep Mode 后生成内容）
-      db.prepare(`
+      const catLabel = catNames[firstCat] || firstCat;
+
+      // 修复 #2 #3 #4: 先创建 tech_plan 拿到 ID，再创建 agent_message 回填
+      const planResult = db.prepare(`
         INSERT INTO tech_plans (requirement_id, category, author_id, content, version, audit_status, review_status, dispatch_phase)
         VALUES (?, ?, ?, '', 1, 'pending', 'generating', ?)
       `).run(req.params.id, firstCat, firstAgent.id, firstCat);
 
-      // 通知 Agent 进入 Deep Mode
-      const catLabel = catNames[firstCat] || firstCat;
+      const techPlanId = planResult.lastInsertRowid;
+
+      // 构建任务标题和内容
+      const taskTitle = '📋 ' + catLabel + ' - ' + requirement.title;
+      const taskContent = `请为需求「${requirement.title}」创建${catLabel}技术方案。
+
+需求描述：
+${requirement.description || '无'}
+
+请按照以下格式生成技术方案：
+1. 方案概述 - 简要说明技术方案的目的和范围
+2. 技术选型 - 使用的工具、框架、库等
+3. 实现步骤 - 具体实现的步骤和要点
+4. 注意事项 - 需要特别注意的事项
+
+请用 Markdown 格式输出完整的技术方案。`;
+
+      // 修复 #3 #4: 创建技术方案任务，回填 tech_plan_id 和正确的 action_url
+      db.prepare(`
+        INSERT INTO agent_messages (agent_id, type, title, content, status, metadata)
+        VALUES (?, 'tech_plan', ?, ?, 'pending', ?)
+      `).run(
+        firstAgent.id,
+        taskTitle,
+        taskContent,
+        JSON.stringify({
+          type: 'tech_plan',
+          tech_plan_id: techPlanId,
+          requirement_id: parseInt(req.params.id),
+          requirement_title: requirement.title,
+          requirement_description: requirement.description,
+          category: firstCat,
+          category_name: catLabel,
+          phase: firstCat,
+          action_url: '/api/tech-plans/' + techPlanId + '/submit'
+        })
+      );
+
+      // 通知 Agent
       db.prepare(`
         INSERT INTO notifications (agent_id, type, title, content)
-        VALUES (?, 'tech_plan_task', '📋 技术方案任务 - ' + ?, '需求「' + ? + '」已通过评审，请完成「' + ? + '」技术方案。需求ID：' + ? + '。提示：请使用 Deep Mode，先检索相关代码再输出方案。')
-      `).run(firstAgent.id, catLabel, requirement.title, catLabel, req.params.id);
+        VALUES (?, 'tech_plan_task', ?, ?)
+      `).run(firstAgent.id, '📋 技术方案任务 - ' + requirement.title, '需求「' + requirement.title + '」已通过评审，请完成「' + catLabel + '」技术方案。需求ID：' + req.params.id + '。请阅读上方通知中的任务详情。');
 
-      // 广播任务派发
+      // 通过 SSE 广播任务派发
       const { broadcastToAgent } = require('../server/sse');
       broadcastToAgent(firstAgent.id, {
         type: 'tech_plan_dispatched',
-        requirement_id: req.params.id,
+        requirement_id: parseInt(req.params.id),
         category: firstCat,
         phase: firstCat,
         title: requirement.title,
-        message: catLabel + ' 技术方案任务已派发，请进入 Deep Mode 开始工作'
+        message: catLabel + ' 技术方案任务已派发，请开始工作',
+        action_url: '/api/tech-plans/' + techPlanId + '/submit'
       });
     }
   }
@@ -352,7 +434,7 @@ router.post('/:id/review', (req, res) => {
   const catsStr = relevantCats.map(c => catNames[c] || c).join(' → ');
   res.json({
     code: 0,
-    message: '需求评审通过，已完成需求分析：' + catsStr + '。当前仅派发首个阶段「' + (catNames[firstCat] || firstCat) + '」，其余阶段将在前置阶段审核通过后依次派发。',
+    message: '需求评审通过，已完成需求分析：' + catsStr + '。已派发首个阶段「' + (catNames[firstCat] || firstCat) + '」给 ' + (firstAgent ? firstAgent.name : '未知') + '，请等待 Agent 返回技术方案。',
     data: {
       categories: relevantCats,
       analysis: {
@@ -363,12 +445,57 @@ router.post('/:id/review', (req, res) => {
         needs_ops: needsOps
       },
       current_phase: firstCat,
-      dispatch_chain: relevantCats
+      dispatch_chain: relevantCats,
+      agent_name: firstAgent ? firstAgent.name : '等待中'
     }
   });
 });
 
-// 模块级常量，供其他模块复用
-const catNames = { ui: 'UI原型', frontend: '前端', backend: '后端', test: '测试', ops: '运维' };
+// 获取类别 Agent 映射
+function getCategoryAgent(category) {
+  const db = getDB();
+  const agentMap = {
+    ui: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'UI Designer'").get(),
+    frontend: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'Frontend Engineer'").get(),
+    backend: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'Backend Engineer'").get(),
+    test: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'Test Engineer'").get(),
+    ops: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'DevOps Engineer'").get()
+  };
+  return agentMap[category];
+}
+
+// 获取 Agent 待处理的任务
+function getAgentTasks(agentId) {
+  const db = getDB();
+  const tasks = db.prepare(`
+    SELECT msg.id, msg.title, msg.content, msg.type,
+           tp.category, tp.id as tech_plan_id
+    FROM agent_messages msg
+    LEFT JOIN tech_plans tp ON msg.metadata::text LIKE CONCAT('%\"tech_plan_id\":', tp.id, '%')
+    WHERE msg.agent_id = ? AND msg.status = 'pending'
+    ORDER BY msg.created_at ASC
+  `).all(agentId);
+  return tasks;
+}
+
+// Agent 执行任务的系统提示
+function getAgentSystemPrompt(task) {
+  const basePrompt = `你是 ATS 系统中的专业技术 Agent，你的职责是根据需求完成技术方案。`;
+
+  if (task.content) {
+    return `${basePrompt}
+
+## 任务信息
+**任务类型**: ${task.type}
+**任务标题**: ${task.title}
+
+## 任务内容
+${task.content}
+
+请仔细阅读任务内容，生成符合要求的技术方案文档，并通过 SSE 接口提交结果。`;
+  }
+
+  return basePrompt;
+}
 
 module.exports = { router, catNames };

@@ -288,4 +288,54 @@ router.patch('/notifications/:notificationId/read', (req, res) => {
   res.json({ code: 0, message: '通知已标记为已读' });
 });
 
+// Agent 实时输出 SSE 端点
+router.get('/:agentId/output', (req, res) => {
+  const db = getDB();
+  const agentId = req.params.agentId;
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+
+  // 初始化 Agent 状态为在线
+  const agent = db.prepare('SELECT * FROM agents WHERE id = ?').get(agentId);
+  if (agent) {
+    db.prepare('UPDATE agents SET status = ? WHERE id = ?').run('working', agentId);
+    db.prepare(`
+      INSERT INTO agent_work_status (agent_id, current_action, current_detail, progress, last_update)
+      VALUES (?, '待工作', '空闲中', 0, CURRENT_TIMESTAMP)
+    `).run(agentId);
+  }
+
+  // 立即发送初始数据
+  res.write(`data: ${JSON.stringify({ type: 'init', agent_id: agentId, agent_name: agent?.name })}\n\n`);
+
+  // 实时推送 Agent 输出
+  const interval = setInterval(() => {
+    const outputs = db.prepare(`
+      SELECT * FROM agent_outputs
+      WHERE agent_id = ?
+      ORDER BY created_at DESC
+      LIMIT 1
+    `).all(agentId);
+
+    for (const output of outputs) {
+      res.write(`data: ${JSON.stringify({
+        type: output.message_type,
+        content: output.content,
+        created_at: output.created_at
+      })}\n\n`);
+    }
+  }, 1000);
+
+  req.on('close', () => {
+    clearInterval(interval);
+    if (agent) {
+      db.prepare('UPDATE agents SET status = ?, current_action = ?, current_detail = ? WHERE id = ?').run('idle', '空闲中', '等待分配任务', agentId);
+      db.prepare('DELETE FROM agent_outputs WHERE agent_id = ?').run(agentId);
+    }
+    res.end();
+  });
+});
+
 module.exports = router;

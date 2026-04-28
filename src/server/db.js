@@ -345,6 +345,48 @@ function initDB() {
     db.exec(`ALTER TABLE notifications ADD COLUMN category TEXT`);
   } catch (e) {}
 
+  // 创建 Agent 消息队列表
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        title TEXT,
+        content TEXT NOT NULL,
+        status TEXT DEFAULT 'pending',
+        priority TEXT DEFAULT 'normal',
+        callback_url TEXT,
+        metadata TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (agent_id) REFERENCES agents(id)
+      )
+    `);
+  } catch (e) {}
+
+  // 添加 metadata 列（如果表已存在）
+  try {
+    db.exec(`ALTER TABLE agent_messages ADD COLUMN metadata TEXT`);
+  } catch (e) {}
+
+  // 创建 Agent 实时输出表
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_outputs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_id TEXT NOT NULL,
+        requirement_id INTEGER,
+        message_type TEXT DEFAULT 'text',
+        content TEXT NOT NULL,
+        metadata TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (agent_id) REFERENCES agents(id),
+        FOREIGN KEY (requirement_id) REFERENCES requirements(id)
+      )
+    `);
+  } catch (e) {}
+
   return db;
 }
 

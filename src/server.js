@@ -1,10 +1,20 @@
 const express = require('express');
 const path = require('path');
+require('dotenv').config();
 const { initDB } = require('./server/db');
 const { registerSSE, unregisterSSE, broadcastToAgent, broadcastToAll } = require('./server/sse');
+const { startAllAgents, startAgentTaskExecutor } = require('./server/agent-manager');
+const approvalsRouter = require('./routes/approvals');
+const agentOutputRouter = require('./routes/agent-output');
 
 // 初始化数据库
 initDB();
+
+// 启动 5 个 Agent 窗口
+startAllAgents();
+
+// 启动 Agent 任务执行器
+startAgentTaskExecutor();
 
 const app = express();
 const PORT = process.env.PORT || 1888;
@@ -24,7 +34,6 @@ app.use(express.static(path.join(__dirname, '../public')));
 const agentsRouter = require('./routes/agents');
 const { router: requirementsRouter } = require('./routes/requirements');
 const tasksRouter = require('./routes/tasks');
-const approvalsRouter = require('./routes/approvals');
 const systemRouter = require('./routes/system');
 const projectsRouter = require('./routes/projects');
 const techPlansRouter = require('./routes/tech-plans');
@@ -38,6 +47,9 @@ app.use('/api/approvals', approvalsRouter);
 app.use('/api/system', systemRouter);
 app.use('/api/tech-plans', techPlansRouter);
 app.use('/api/local-projects', localProjectsRouter);
+
+app.use('/api/agents/output', agentOutputRouter);
+console.log('[DEBUG] agentOutputRouter routes:', agentOutputRouter.stack.map(r => r.route?.path));
 
 // 主页面
 app.get('/', (req, res) => {

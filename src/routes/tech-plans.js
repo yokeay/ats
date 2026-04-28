@@ -3,6 +3,7 @@ const router = express.Router();
 const { getDB } = require('../server/db');
 const { broadcastToAgent } = require('../server/sse');
 const { catNames } = require('./requirements');
+const { sendToAgent } = require('../server/agent-manager');
 
 // 获取所有技术方案（只展示最新版本，支持搜索、排序、分页）
 router.get('/', (req, res) => {
@@ -178,8 +179,50 @@ router.patch('/:id', (req, res) => {
   res.json({ code: 0, message: '技术方案更新成功' });
 });
 
+// 获取类别 Agent 映射
+function getCategoryAgent(category) {
+  const db = getDB();
+  return {
+    ui: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'UI Designer'").get(),
+    frontend: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'Frontend Engineer'").get(),
+    backend: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'Backend Engineer'").get(),
+    test: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'Test Engineer'").get(),
+    ops: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'DevOps Engineer'").get()
+  }[category];
+}
+
+// 创建技术方案重新生成任务（修复 #11）
+function createRegenerateTask(techPlanId, requirementId, category, catLabel, comment) {
+  const db = getDB();
+  const agent = getCategoryAgent(category);
+  if (!agent) return;
+
+  const result = db.prepare(`
+    INSERT INTO agent_messages (agent_id, type, title, content, status, metadata)
+    VALUES (?, 'tech_plan', ?, ?, 'pending', ?)
+  `).run(
+    agent.id,
+    '🔄 重新生成 - ' + catLabel + '技术方案 - 需求 ' + requirementId,
+    '请为需求重新生成' + catLabel + '技术方案。\n\n' +
+    '驳回意见：' + comment + '\n\n' +
+    '技术方案 ID: ' + techPlanId + '\n' +
+    '需求 ID: ' + requirementId + '\n' +
+    '类别: ' + category + '\n\n' +
+    '请根据驳回意见重新生成完整的技术方案内容。',
+    JSON.stringify({
+      type: 'tech_plan',
+      tech_plan_id: techPlanId,
+      requirement_id: requirementId,
+      category: category,
+      category_name: catLabel
+    })
+  );
+
+  console.log('[tech-plans] 已创建重新生成任务: agent_message_id=' + result.lastInsertRowid);
+}
+
 // 审核技术方案（通过/驳回）
-router.post('/:id/audit', (req, res) => {
+router.post('/:id/audit', async (req, res) => {
   const db = getDB();
   const { result, comment } = req.body;
   // result: 'pass' | 'reject'
@@ -212,55 +255,67 @@ router.post('/:id/audit', (req, res) => {
   if (result === 'pass') {
     db.prepare(`UPDATE tech_plans SET audit_status = 'pass', auditor_id = 'leader-001', audited_at = CURRENT_TIMESTAMP, audit_comment = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(comment || '', req.params.id);
 
-    // 闭环：审核通过 → 自动创建执行任务
-    const taskTitle = '【' + catLabel + '】技术方案执行 - ' + planTitle;
-    const taskResult = db.prepare(`
-      INSERT INTO tasks (requirement_id, title, description, assignee_id, status, priority)
-      VALUES (?, ?, ?, ?, 'todo', 'p1')
-    `).run(
-      techPlan.requirement_id,
-      taskTitle,
-      '技术方案ID：' + techPlan.id + '\n类别：' + catLabel + '\n\n请严格按照技术方案执行开发，完成后更新任务状态为已完成。',
-      techPlan.author_id
-    );
+    // 调用 Leader Agent 做状态流转决策（修复 #8 #9 #13）
+    const leaderDecision = await leadAgentDecideFlow(db, techPlan, '通过', catAgents);
 
-    // 通知负责人：方案通过，已自动创建执行任务
+    if (leaderDecision.decision === '创建执行任务') {
+      // 二次验证所有阶段是否都通过（修复 #13）
+      const allPhases = ['ui', 'frontend', 'backend', 'test'];
+      const allPassed = checkAllPhasesPassed(db, techPlan.requirement_id, allPhases);
+      if (allPassed) {
+        const requirement = db.prepare('SELECT title FROM requirements WHERE id = ?').get(techPlan.requirement_id);
+        createExecutionTask(db, techPlan.requirement_id, requirement?.title || '需求');
+        db.prepare(`UPDATE requirements SET status = 'done', updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(techPlan.requirement_id);
+      }
+    } else if (leaderDecision.decision === '派发下一阶段') {
+      // 支持派发多个阶段（修复 #9 - UI 通过派发前端+后端）
+      const phasesToDispatch = Array.isArray(leaderDecision.next_phases) ? leaderDecision.next_phases : [];
+      for (const phase of phasesToDispatch) {
+        dispatchNextPhase(db, techPlan, catAgents, phase);
+      }
+    }
+
+    // 通知负责人：方案通过
+    const notifyContent = leaderDecision.decision === '创建执行任务'
+      ? catLabel + '技术方案已审核通过。需求评审完成，已创建执行任务给前端/后端/测试。'
+      : catLabel + '技术方案已审核通过。已派发下一阶段技术方案，请关注新任务通知。';
+
     db.prepare(`
       INSERT INTO notifications (agent_id, type, title, content, tech_plan_id, requirement_id, category)
       VALUES (?, 'tech_plan_approved', '✅ 技术方案通过 - ' + ?, ?, ?, ?, ?)
     `).run(
       techPlan.author_id,
       planTitle,
-      catLabel + '技术方案已审核通过，已自动创建任务【' + taskTitle + '】，请前往任务管理查看并执行。',
+      notifyContent,
       parseInt(req.params.id),
       techPlan.requirement_id,
       techPlan.category
     );
 
-    // 广播通知给 Agent，含任务ID
+    // 广播通知给 Agent
     broadcastToAgent(techPlan.author_id, {
       type: 'tech_plan_approved',
       tech_plan_id: parseInt(req.params.id),
       requirement_id: techPlan.requirement_id,
       category: techPlan.category,
       title: planTitle,
-      task_id: taskResult.lastInsertRowid,
-      task_title: taskTitle
+      leader_decision: leaderDecision,
+      next_phase_dispatched: leaderDecision.decision === '派发下一阶段'
     });
-
-    // 派发下一阶段（根据 dispatch_phase 链）
-    dispatchNextPhase(db, techPlan, catAgents);
   } else {
-    // 驳回：将当前版本标记为驳回，创建新版本记录
+    // 驳回：将当前版本标记为驳回，创建新版本（修复 #11）
     const maxVersion = db.prepare('SELECT MAX(version) as maxv FROM tech_plans WHERE requirement_id = ? AND category = ? AND deleted = 0').get(techPlan.requirement_id, techPlan.category).maxv || 1;
     const newVersion = maxVersion + 1;
 
     // 当前版本标记为驳回
     db.prepare(`UPDATE tech_plans SET audit_status = 'reject', auditor_id = 'leader-001', audited_at = CURRENT_TIMESTAMP, audit_comment = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(comment, req.params.id);
 
-    // 创建新版本记录，状态设为 generating
-    db.prepare(`INSERT INTO tech_plans (requirement_id, category, author_id, content, version, audit_status, review_status, dispatch_phase) VALUES (?, ?, ?, ?, ?, 'pending', 'generating', ?)`)
+    // 创建新版本记录，状态 generating
+    const newPlanResult = db.prepare(`INSERT INTO tech_plans (requirement_id, category, author_id, content, version, audit_status, review_status, dispatch_phase) VALUES (?, ?, ?, ?, ?, 'pending', 'generating', ?)`)
       .run(techPlan.requirement_id, techPlan.category, techPlan.author_id, techPlan.content || '', newVersion, techPlan.dispatch_phase);
+
+    // 创建重新生成任务，metadata 含正确 tech_plan_id（修复 #11）
+    createRegenerateTask(newPlanResult.lastInsertRowid, techPlan.requirement_id, techPlan.category, catLabel, comment);
 
     // 通知负责人
     db.prepare(`
@@ -339,8 +394,11 @@ router.post('/:id/regenerate', (req, res) => {
     WHERE id = ?
   `).run(req.params.id);
 
-  // 通知 Agent 重新生成
+  // 创建重新生成任务
   const catLabel = catNames[techPlan.category] || techPlan.category;
+  ensureTechPlanTaskCreated(req.params.id, techPlan.requirement_id, techPlan.category, catLabel, null);
+
+  // 通知 Agent 重新生成
   db.prepare(`
     INSERT INTO notifications (agent_id, type, title, content)
     VALUES (?, 'tech_plan_task', '🔄 技术方案重新生成 - ' + ?, '需求方案被驳回，请根据审核意见重新生成「' + ? + '」技术方案。审核意见：' + ? + '。需求ID：' + ?)
@@ -370,40 +428,212 @@ function getNextPhase(currentPhase) {
   return null;
 }
 
-function dispatchNextPhase(db, techPlan, catAgents) {
-  const nextPhase = getNextPhase(techPlan.dispatch_phase);
-  if (!nextPhase) return;
+// 派发指定阶段的技术方案（修复 #12 - 同时创建 agent_message 任务）
+function dispatchNextPhase(db, techPlan, catAgents, targetPhase) {
+  const phase = targetPhase || getNextPhase(techPlan.dispatch_phase);
+  if (!phase) return;
 
-  // 查找下一个阶段是否已有方案
+  // 查找该阶段是否已有方案
   const existingNext = db.prepare(`
     SELECT id FROM tech_plans
     WHERE requirement_id = ? AND dispatch_phase = ? AND deleted = 0
     ORDER BY version DESC LIMIT 1
-  `).get(techPlan.requirement_id, nextPhase);
+  `).get(techPlan.requirement_id, phase);
 
   if (existingNext) return; // 已有方案，无需重复创建
 
-  const nextAgent = catAgents[nextPhase];
+  const nextAgent = catAgents[phase];
   if (!nextAgent) return;
 
   // 检查该类别方案是否已达4个版本上限
   const existingCount = db.prepare(
     'SELECT COUNT(*) as count FROM tech_plans WHERE requirement_id = ? AND category = ? AND deleted = 0'
-  ).get(techPlan.requirement_id, nextPhase);
+  ).get(techPlan.requirement_id, phase);
   if (existingCount.count >= 4) return;
 
-  // 创建新方案记录（空内容，等待 Agent 填充）
-  db.prepare(`
+  // 创建方案记录（空内容，等待 Agent 填充）
+  const planResult = db.prepare(`
     INSERT INTO tech_plans (requirement_id, category, author_id, content, version, audit_status, review_status, dispatch_phase)
     VALUES (?, ?, ?, '', 1, 'pending', 'generating', ?)
-  `).run(techPlan.requirement_id, nextPhase, nextAgent.id, nextPhase);
+  `).run(techPlan.requirement_id, phase, nextAgent.id, phase);
 
-  const catLabel = catNames[nextPhase] || nextPhase;
-  const reqTitle = db.prepare('SELECT title FROM requirements WHERE id = ?').get(techPlan.requirement_id);
+  const techPlanId = planResult.lastInsertRowid;
+
+  // 关键修复 #12：同时创建 agent_message 任务，让执行器能拾取
+  const reqRow = db.prepare('SELECT title, description FROM requirements WHERE id = ?').get(techPlan.requirement_id);
+  const reqTitle = reqRow ? reqRow.title : '';
+  const reqDesc = reqRow ? reqRow.description : '';
+  const catLabel = catNames[phase] || phase;
+
+  db.prepare(`
+    INSERT INTO agent_messages (agent_id, type, title, content, status, metadata)
+    VALUES (?, 'tech_plan', ?, ?, 'pending', ?)
+  `).run(
+    nextAgent.id,
+    '📋 ' + catLabel + '技术方案 - ' + reqTitle,
+    '请为需求「' + reqTitle + '」创建' + catLabel + '技术方案。\n\n需求描述：\n' + reqDesc + '\n\n请按照以下格式生成技术方案：\n1. 方案概述\n2. 技术选型\n3. 实现步骤\n4. 注意事项\n\n请用 Markdown 格式输出完整的技术方案。',
+    JSON.stringify({
+      type: 'tech_plan',
+      tech_plan_id: techPlanId,
+      requirement_id: techPlan.requirement_id,
+      category: phase,
+      category_name: catLabel
+    })
+  );
+
+  // 通知 Agent
   db.prepare(`
     INSERT INTO notifications (agent_id, type, title, content)
     VALUES (?, 'tech_plan_task', '📋 技术方案任务 - ' + ?, '需求「' + ? + '」的前序方案已通过评审，请完成「' + ? + '」技术方案文档并提交。需求ID：' + ?)
-  `).run(nextAgent.id, catLabel, reqTitle ? reqTitle.title : '', catLabel, techPlan.requirement_id);
+  `).run(nextAgent.id, catLabel, reqTitle, catLabel, techPlan.requirement_id);
+
+  console.log(`[tech-plans] 已派发阶段 ${catLabel} 给 ${nextAgent.name}, tech_plan_id=${techPlanId}`);
+}
+
+// 验证所有阶段都已通过
+function checkAllPhasesPassed(db, requirementId, phases) {
+  for (const phase of phases) {
+    const plan = db.prepare(`
+      SELECT id, audit_status FROM tech_plans
+      WHERE requirement_id = ? AND category = ? AND deleted = 0
+      ORDER BY version DESC LIMIT 1
+    `).get(requirementId, phase);
+
+    if (!plan || plan.audit_status !== 'pass') {
+      return false;
+    }
+  }
+  return true;
+}
+
+// 当最后一个阶段通过后，创建执行任务（修复 #14）
+function createExecutionTask(db, requirementId, requirementTitle) {
+  const catAgents = {
+    ui: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'UI Designer'").get(),
+    frontend: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'Frontend Engineer'").get(),
+    backend: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'Backend Engineer'").get(),
+    test: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'Test Engineer'").get(),
+    ops: db.prepare("SELECT id, name, emoji FROM agents WHERE role = 'DevOps Engineer'").get()
+  };
+
+  // 确定执行者：后端开发 + 前端开发 + 测试
+  const executors = [];
+  if (catAgents.frontend?.id) executors.push({ id: catAgents.frontend.id, name: catAgents.frontend.name });
+  if (catAgents.backend?.id) executors.push({ id: catAgents.backend.id, name: catAgents.backend.name });
+  if (catAgents.test?.id) executors.push({ id: catAgents.test.id, name: catAgents.test.name });
+
+  // 为每个执行者创建任务 + agent_message（修复 #14）
+  executors.forEach(ex => {
+    const taskResult = db.prepare(`
+      INSERT INTO tasks (requirement_id, title, description, assignee_id, status, priority)
+      VALUES (?, ?, ?, ?, 'todo', 'p1')
+    `).run(
+      requirementId,
+      '【执行】完成 ' + requirementTitle,
+      '需求方案评审全部通过，请根据技术方案完成实际开发工作。',
+      ex.id
+    );
+
+    // 创建 agent_message 通知 Agent
+    db.prepare(`
+      INSERT INTO agent_messages (agent_id, type, title, content, status, metadata)
+      VALUES (?, 'task', ?, ?, 'pending', ?)
+    `).run(
+      ex.id,
+      '【执行】完成 ' + requirementTitle,
+      '需求「' + requirementTitle + '」的所有技术方案评审通过，请根据技术方案完成实际开发工作。',
+      JSON.stringify({
+        task_id: taskResult.lastInsertRowid,
+        requirement_id: requirementId
+      })
+    );
+
+    console.log(`[tech-plans] 已创建执行任务给 ${ex.name}, task_id=${taskResult.lastInsertRowid}`);
+  });
+
+  return executors.length;
+}
+
+// 由 Leader Agent 决定状态流转（修复 #8）
+async function leadAgentDecideFlow(db, techPlan, action, catAgents) {
+  const allPlans = db.prepare(`
+    SELECT tp.*, r.title as req_title, r.status as req_status
+    FROM tech_plans tp
+    LEFT JOIN requirements r ON tp.requirement_id = r.id
+    WHERE tp.requirement_id = ? AND tp.deleted = 0
+    ORDER BY tp.dispatch_phase, tp.created_at ASC
+  `).all(techPlan.requirement_id);
+
+  const plansByPhase = {};
+  allPlans.forEach(p => {
+    if (!plansByPhase[p.dispatch_phase]) {
+      plansByPhase[p.dispatch_phase] = [];
+    }
+    plansByPhase[p.dispatch_phase].push(p);
+  });
+
+  const decision = await sendToAgent('leader-001', {
+    title: '状态流转决策',
+    content: `当前通过的技术方案：
+- 方案ID：${techPlan.id}
+- 类别：${techPlan.category}
+- 流程阶段：${techPlan.dispatch_phase}
+- 版本：V${techPlan.version}
+
+该需求所有技术方案状态（dispatch_chain: ui → frontend → backend → test）：
+${JSON.stringify(plansByPhase, null, 2)}
+
+请严格以 JSON 格式返回（不要其他解释），根据以下规则决策：
+- UI 通过 → next_phases: ["frontend", "backend"]
+- 前端通过 → next_phases: ["backend"]
+- 后端通过 → next_phases: ["test"]
+- 测试通过 → decision: "创建执行任务"
+{
+  "decision": "派发下一阶段" | "创建执行任务",
+  "next_phases": ["frontend", "backend"]  // 仅 decision 为"派发下一阶段"时需要
+}
+`
+  });
+
+  // 解析决策（修复 #8 - 解析失败不再 fallback，直接抛错）
+  if (decision && decision.success && decision.response) {
+    try {
+      const jsonMatch = decision.response.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (parsed.decision) {
+          console.log(`[tech-plans] Leader 决策: ${JSON.stringify(parsed)}`);
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.error('[tech-plans] 解析 Leader 决策失败:', e.message);
+    }
+  }
+
+  // 解析失败则本地规则决策（保守降级）
+  console.warn('[tech-plans] Leader 决策解析失败，使用本地规则降级决策');
+  return getLocalFallbackDecision(techPlan);
+}
+
+// 本地降级决策规则（Leader Agent 不可用时使用）
+function getLocalFallbackDecision(techPlan) {
+  const phase = techPlan.dispatch_phase;
+
+  if (phase === 'ui') {
+    return { decision: '派发下一阶段', next_phases: ['frontend', 'backend'] };
+  }
+  if (phase === 'frontend') {
+    return { decision: '派发下一阶段', next_phases: ['backend'] };
+  }
+  if (phase === 'backend') {
+    return { decision: '派发下一阶段', next_phases: ['test'] };
+  }
+  if (phase === 'test') {
+    return { decision: '创建执行任务' };
+  }
+
+  return { decision: '派发下一阶段', next_phases: [getNextPhase(phase)] };
 }
 
 // Agent 提交技术方案内容（由 Agent 主动调用，提交 markdown 文档内容）

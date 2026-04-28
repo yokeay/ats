@@ -210,4 +210,25 @@ router.get('/logs/all', (req, res) => {
   res.json({ code: 0, data: logs });
 });
 
+// 发送任务给 Agent（API方式）
+router.post('/:agentId/send-task', async (req, res) => {
+  const { getDB } = require('../server/db');
+  const { sendToAgent } = require('../server/agent-manager');
+
+  const db = getDB();
+  const agent = db.prepare('SELECT * FROM agents WHERE id = ?').get(req.params.agentId);
+  if (!agent) {
+    return res.status(404).json({ code: 404, message: 'Agent 不存在' });
+  }
+
+  const { title, content } = req.body;
+  if (!title || !content) {
+    return res.status(400).json({ code: 400, message: '缺少任务参数' });
+  }
+
+  const messageId = await sendToAgent(req.params.agentId, { title, content });
+
+  res.json({ code: 0, data: { messageId }, message: '任务已发送给 Agent' });
+});
+
 module.exports = router;
